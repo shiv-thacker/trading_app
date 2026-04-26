@@ -1,0 +1,9 @@
+# DEPRECATED
+# ==========
+# Render deployment is no longer required.
+#
+# Project now runs fully on Firebase Cloud Functions (Node.js).
+# Keep this file only for historical reference.
+#
+# Setup guide:
+#   docs/FIREBASE_ONLY_SETUP.md

@@ -1,0 +1,53 @@
+name: ai_trader
+description: |
+  AI Trader — ARJUN autonomous NSE stock trading app.
+  Firebase-powered backend trades Indian stocks 24/7.
+  Flutter app provides real-time portfolio monitoring.
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Firebase
+  firebase_core: ^3.3.0
+  cloud_firestore: ^5.2.1
+  cloud_functions: ^5.1.0
+
+  # Charts
+  fl_chart: ^0.68.0
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Date/time formatting
+  intl: ^0.19.0
+  timeago: ^3.6.1
+
+  # Notifications
+  flutter_local_notifications: ^17.2.2
+
+  # Typography
+  google_fonts: ^6.2.1
+
+  # UI utilities
+  shimmer: ^3.0.0
+
+  # First launch / settings persistence
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.11
+  riverpod_generator: ^2.4.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

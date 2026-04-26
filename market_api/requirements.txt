@@ -1,0 +1,7 @@
+# DEPRECATED
+# ==========
+# This Python service is no longer used in runtime.
+# Project now uses Firebase-only backend (Node.js Cloud Functions).
+#
+# See:
+#   docs/FIREBASE_ONLY_SETUP.md
