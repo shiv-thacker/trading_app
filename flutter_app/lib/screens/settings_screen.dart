@@ -26,6 +26,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _isTriggering = false;
   bool _isResetting  = false;
+  bool _isDummyTrading = false;
 
   // ── Manual trigger ──────────────────────────────────────────
   Future<void> _runManualCycle() async {
@@ -97,6 +98,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  // ── Dummy trade test (works even when market is closed) ─────
+  Future<void> _runDummyTradeTest() async {
+    setState(() => _isDummyTrading = true);
+    final action = DateTime.now().millisecond.isEven ? 'BUY' : 'SELL';
+    final result = await ref
+        .read(firestoreServiceProvider)
+        .runDummyTradeTest(action: action);
+    if (!mounted) return;
+    setState(() => _isDummyTrading = false);
+
+    final success = result['success'] as bool? ?? false;
+    if (success) {
+      _showSnack(
+        '✅ Dummy $action test recorded (works outside market hours)',
+        color: const Color(0xFF00C853),
+      );
+    } else {
+      _showSnack('❌ ${result['error'] ?? 'Dummy trade test failed'}', color: Colors.red);
+    }
+  }
+
   void _showSnack(String msg, {required Color color}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -143,6 +165,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: 'Manually trigger ARJUN — useful for testing',
                 loading: _isTriggering,
                 onTap: _runManualCycle,
+              ),
+              Divider(color: Colors.white.withOpacity(0.06)),
+              _ActionTile(
+                icon: Icons.bug_report_rounded,
+                iconColor: const Color(0xFF4FC3F7),
+                title: 'Run dummy buy/sell test',
+                subtitle: 'Executes synthetic trade even if market is closed',
+                subtitle2: 'No portfolio cash/holdings change',
+                loading: _isDummyTrading,
+                onTap: _runDummyTradeTest,
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _ActionTile(

@@ -195,6 +195,21 @@ class FirestoreService {
     }
   }
 
+  /// Calls runDummyTradeTest Cloud Function.
+  /// Writes a synthetic BUY/SELL trade even if market is closed.
+  /// Does not modify the real portfolio.
+  Future<Map<String, dynamic>> runDummyTradeTest({required String action}) async {
+    try {
+      final callable = _functions.httpsCallable('runDummyTradeTest');
+      final result = await callable.call({'action': action});
+      return Map<String, dynamic>.from(result.data as Map);
+    } on FirebaseFunctionsException catch (e) {
+      return {'success': false, 'error': e.message};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   // ── Utility ───────────────────────────────────────────────
 
   /// Returns the total realized P&L from all SELL trades.

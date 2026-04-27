@@ -386,9 +386,10 @@ async function runTradingCycle() {
 // FUNCTION 1: tradingLoop — Scheduled every 5 minutes
 // ─────────────────────────────────────────────────────────────
 /**
- * Scheduled Cloud Function — runs every 5 minutes, 24/7.
- * The function itself checks if the market is open; if not, it logs
- * MARKET_CLOSED and exits in under 1 second.
+ * Scheduled Cloud Function — runs every 5 minutes on weekdays,
+ * between 09:00 and 15:55 IST only.
+ * Market-hours guard still enforces actual trade window (09:15–15:30 IST),
+ * so any out-of-window trigger exits safely.
  *
  * Firebase Blaze plan required for Cloud Scheduler.
  * Timezone: Asia/Kolkata (IST)
@@ -399,7 +400,7 @@ exports.tradingLoop = functions
     memory: "512MB",       // Needed for market data processing
   })
   .pubsub
-  .schedule("every 5 minutes")
+  .schedule("*/5 9-15 * * 1-5")
   .timeZone("Asia/Kolkata")
   .onRun(async () => {
     try {
@@ -500,6 +501,71 @@ exports.resetPortfolio = functions
       return { success: true, message: "Portfolio reset to ₹10,000 successfully." };
     } catch (err) {
       logger.error("resetPortfolio failed:", err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 4: runDummyTradeTest — HTTPS Callable (Settings screen)
+// ─────────────────────────────────────────────────────────────
+/**
+ * Executes a synthetic BUY or SELL test trade even when market is closed.
+ * This is a pipeline health-check only (callable → Firestore write → app UI).
+ * It does NOT modify the real portfolio holdings/cash.
+ */
+exports.runDummyTradeTest = functions
+  .runWith({ timeoutSeconds: 120 })
+  .https
+  .onCall(async (data, context) => {
+    const requestedAction = String(data?.action || "").toUpperCase();
+    const action = requestedAction === "SELL" ? "SELL" : "BUY";
+    const symbol = "DUMMYTEST";
+    const price = 123.45;
+    const quantity = 5;
+    const totalAmount = Number((price * quantity).toFixed(2));
+
+    logger.info(`Dummy trade test requested. Action=${action}`);
+
+    try {
+      await recordTrade({
+        action,
+        symbol,
+        companyName: "Dummy Test Instrument",
+        sector: "Test",
+        quantity,
+        price,
+        totalAmount,
+        reason: "Manual dummy trade test from Settings screen.",
+        confidence: "LOW",
+        stopLoss: action === "BUY" ? 115 : 0,
+        target: action === "BUY" ? 135 : 0,
+        tradeType: "MOMENTUM",
+        marketSentiment: "NEUTRAL",
+        portfolioValueAfter: 0,
+      });
+
+      await recordAILog({
+        timestamp: Date.now(),
+        marketAnalysis: "Dummy trade pipeline test executed manually from app settings.",
+        thoughts: [
+          `Synthetic ${action} recorded for ${symbol}.`,
+          "This test bypasses market-hours guard intentionally.",
+          "No portfolio cash/holdings were modified.",
+        ],
+        portfolioHealth: "OK",
+        marketSentiment: "NEUTRAL",
+        nextFocus: "Confirm logs and trade history render correctly in app UI.",
+        tradeCount: 1,
+        cycleStatus: "WAITED",
+      });
+
+      return {
+        success: true,
+        message: `Dummy ${action} trade recorded successfully.`,
+        trade: { action, symbol, quantity, price, totalAmount },
+      };
+    } catch (err) {
+      logger.error("runDummyTradeTest failed:", err.message);
       return { success: false, error: err.message };
     }
   });

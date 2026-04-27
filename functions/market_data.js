@@ -33,6 +33,20 @@ const CACHE = {
   nifty500: { value: null, expiresAt: 0 },
 };
 
+const NSE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "text/csv,application/json,text/plain,*/*",
+  "Accept-Language": "en-IN,en;q=0.9",
+  "Referer": "https://www.nseindia.com/",
+  "Origin": "https://www.nseindia.com",
+  "Connection": "keep-alive",
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isFresh(cacheObj) {
   return cacheObj.value && Date.now() < cacheObj.expiresAt;
 }
@@ -64,26 +78,74 @@ function parseNifty500CSV(csvText) {
 
 async function getNifty500Universe() {
   if (isFresh(CACHE.nifty500)) return CACHE.nifty500.value;
-  const { data } = await axios.get(NIFTY500_CSV_URL, { timeout: 15000 });
-  const parsed = parseNifty500CSV(data);
-  if (!parsed.length) throw new Error("Could not parse Nifty 500 CSV");
-  CACHE.nifty500 = {
-    value: parsed,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-  };
-  return parsed;
+
+  // NSE often returns 403 without a fresh cookie+browser-like headers.
+  // We bootstrap a session and retry with backoff to handle market-hour spikes.
+  const session = axios.create({
+    timeout: 20000,
+    headers: NSE_HEADERS,
+  });
+
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const landingResp = await session.get("https://www.nseindia.com/");
+      const setCookie = landingResp.headers?.["set-cookie"] || [];
+      const cookieHeader = Array.isArray(setCookie) ? setCookie.map((c) => c.split(";")[0]).join("; ") : "";
+      const { data } = await session.get(NIFTY500_CSV_URL, {
+        headers: cookieHeader ? { Cookie: cookieHeader } : undefined,
+      });
+
+      const parsed = parseNifty500CSV(data);
+      if (!parsed.length) throw new Error("Could not parse Nifty 500 CSV");
+      CACHE.nifty500 = {
+        value: parsed,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      };
+      return parsed;
+    } catch (err) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const retryable = status === 403 || status === 429 || !status;
+      if (!retryable || attempt === 3) break;
+      await sleep(350 * attempt);
+    }
+  }
+
+  throw lastErr || new Error("Unable to fetch Nifty 500 universe");
 }
 
 async function fetchYahooChart(symbol, range = "1mo", interval = "1d") {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
-  const { data } = await axios.get(url, {
-    timeout: 20000,
-    params: { range, interval },
-    headers: { "User-Agent": "Mozilla/5.0" },
-  });
-  const result = data?.chart?.result?.[0];
-  if (!result) throw new Error(`No Yahoo chart result for ${symbol}`);
-  return result;
+  const hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
+  let lastErr;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    for (const host of hosts) {
+      try {
+        const url = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}`;
+        const { data } = await axios.get(url, {
+          timeout: 20000,
+          params: { range, interval },
+          headers: {
+            "User-Agent": NSE_HEADERS["User-Agent"],
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        });
+        const result = data?.chart?.result?.[0];
+        if (!result) throw new Error(`No Yahoo chart result for ${symbol}`);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        const status = err?.response?.status;
+        const retryable = status === 403 || status === 429 || !status;
+        if (!retryable) throw err;
+      }
+    }
+    await sleep(200 * attempt);
+  }
+
+  throw lastErr || new Error(`Failed fetching Yahoo chart for ${symbol}`);
 }
 
 function getLatestOHLC(result) {
