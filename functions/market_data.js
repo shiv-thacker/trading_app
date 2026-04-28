@@ -46,6 +46,7 @@ const CACHE = {
   movers:    { value: null, expiresAt: 0 },
   // nifty500 data is shared between getTopMovers and getCurrentPrices
   nifty500:  { value: null, expiresAt: 0 },
+  indicators: { value: {}, expiresAt: 0 },
 };
 
 function isFresh(entry) {
@@ -54,6 +55,27 @@ function isFresh(entry) {
 
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+function to2(n) {
+  return Number((Number(n || 0)).toFixed(2));
+}
+
+function updateEma(prev, price, period) {
+  const alpha = 2 / (period + 1);
+  if (!Number.isFinite(prev) || prev <= 0) return price;
+  return prev + alpha * (price - prev);
+}
+
+function buildPivotLevels(high, low, close) {
+  const pp = (high + low + close) / 3;
+  const r1 = (2 * pp) - low;
+  const s1 = (2 * pp) - high;
+  return {
+    pivotPP: to2(pp),
+    pivotR1: to2(r1),
+    pivotS1: to2(s1),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -170,6 +192,7 @@ async function getTopMovers() {
     logger.info("Computing top movers from Nifty 500 data...");
 
     const stocks = await fetchNifty500();
+    const indicators = CACHE.indicators.value || {};
 
     const candidates = [];
     for (const s of stocks) {
@@ -188,18 +211,42 @@ async function getTopMovers() {
       if (price      <= 20)     continue;
       if (prevClose > 0 && price <= prevClose) continue;
 
+      const prev = indicators[s.symbol] || {};
+      const ema9 = updateEma(prev.ema9, price, 9);
+      const ema21 = updateEma(prev.ema21, price, 21);
+      const ema50 = updateEma(prev.ema50, price, 50);
+      const avgVolume = updateEma(prev.avgVolume, volume, 20);
+      const volumeRatio = avgVolume > 0 ? volume / avgVolume : 0;
+      const vwap = Number(s.vwap || s.stockIndClosePrice || ((dayHigh + dayLow + price) / 3));
+      const pivots = buildPivotLevels(dayHigh, dayLow, prevClose || price);
+
+      indicators[s.symbol] = {
+        ema9,
+        ema21,
+        ema50,
+        avgVolume,
+        lastUpdated: Date.now(),
+      };
+
       candidates.push({
         symbol:      s.symbol,
         companyName: s.symbol,          // NSE batch doesn't include company name
         sector:      "NSE",
-        price:       Number(price.toFixed(2)),
-        changePct:   Number(changePct.toFixed(2)),
+        price:       to2(price),
+        changePct:   to2(changePct),
         volume:      Math.round(volume),
-        dayHigh:     Number(dayHigh.toFixed(2)),
-        dayLow:      Number(dayLow.toFixed(2)),
-        high52w:     Number(yearHigh.toFixed(2)),
-        low52w:      Number(yearLow.toFixed(2)),
-        _score:      changePct * Math.log1p(volume), // log-scale volume to avoid mega-caps dominating
+        avgVolume:   Math.round(avgVolume),
+        volumeRatio: to2(volumeRatio),
+        vwap:        to2(vwap),
+        ema9:        to2(ema9),
+        ema21:       to2(ema21),
+        ma50:        to2(ema50),
+        dayHigh:     to2(dayHigh),
+        dayLow:      to2(dayLow),
+        high52w:     to2(yearHigh),
+        low52w:      to2(yearLow),
+        ...pivots,
+        _score:      changePct * Math.log1p(volume) * (ema9 > ema21 ? 1.1 : 1), // slight trend boost
       });
     }
 
@@ -209,6 +256,7 @@ async function getTopMovers() {
       .map(({ _score, ...rest }) => rest);
 
     CACHE.movers = { value: topMovers, expiresAt: Date.now() + 4 * 60_000 };
+    CACHE.indicators = { value: indicators, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
     logger.info(`Computed ${topMovers.length} live top movers from Nifty 500`);
     return topMovers;
   } catch (err) {

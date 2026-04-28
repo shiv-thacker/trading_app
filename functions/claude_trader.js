@@ -87,6 +87,15 @@ CRITICAL RULES:
 - Volume ratio (volumeRatio) above 1.5x is a strong confirmation signal — prioritise it
 - Price above ma50 confirms the stock is in an uptrend — required for BUY
 - A stock near its 52-week high (price > 90% of high52w) is in breakout territory — high conviction
+- Price above VWAP is stronger BUY confirmation
+- EMA9 > EMA21 confirms short-term trend strength; prefer these stocks
+- Price near pivotS1 can be a good entry zone
+- Avoid fresh BUY very close to pivotR1 due to near-term resistance
+- If EMA9 > EMA21 AND price > MA50: strong uptrend — prefer these stocks
+- If price > 95% of high52w: breakout territory — high conviction
+- If volumeRatio > 2x: exceptional liquidity — strong signal
+- If price > PP and R1 is nearby: wait, too much resistance ahead
+- If price > PP and R1 is far: good room to run — valid entry
 - Never ignore the Nifty 50 trend — if it is down >1%, go defensive regardless of individual signals`;
 }
 
@@ -115,11 +124,13 @@ function buildUserPrompt(marketData, portfolio) {
       : "  (No current holdings — fully in cash)";
 
   // All 20 top movers with full trading-relevant fields
-  const topMoversClean = (topMovers || []).map(({ symbol, companyName, sector, price, changePct, volume, avgVolume, volumeRatio, ma50, dayHigh, dayLow, high52w, low52w }) => ({
+  const topMoversClean = (topMovers || []).map(({ symbol, companyName, sector, price, changePct, volume, avgVolume, volumeRatio, ma50, vwap, ema9, ema21, dayHigh, dayLow, high52w, low52w, pivotPP, pivotR1, pivotS1 }) => ({
     symbol, companyName, sector,
     price, changePct,
     volume, avgVolume, volumeRatio,
-    ma50, dayHigh, dayLow, high52w, low52w,
+    ma50, vwap, ema9, ema21,
+    dayHigh, dayLow, high52w, low52w,
+    pivotPP, pivotR1, pivotS1,
   }));
   const topMoversStr = JSON.stringify(topMoversClean, null, 2);
 
@@ -167,8 +178,8 @@ PORTFOLIO LIMITS:
 ENTRY — buy only if ALL conditions met:
 - Stock up >1.5% today
 - Volume > 1.5x its 10-day average
-- RSI between 45 and 70
-- Price above both 5-day and 10-day moving average
+- EMA9 > EMA21
+- Price > MA50
 - Sector index is positive today
 - Not already holding this stock
 

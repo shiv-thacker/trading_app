@@ -219,3 +219,42 @@ This fits comfortably on Anthropic's **Build tier** (200k tokens/min).
 | Scale   | 500,000 tokens/min  | Pay per use  |
 
 Check current limits: https://docs.anthropic.com/en/api/rate-limits
+
+---
+
+## Indicator Source Notes (Added Apr 28, 2026)
+
+These new fields were added to ARJUN's top movers payload:
+
+- `vwap`
+- `ema9`
+- `ema21`
+- `pivotPP`
+- `pivotR1`
+- `pivotS1`
+
+### Where each indicator comes from
+
+- **NSE API direct values**
+  - Base data comes from NSE endpoints:
+    - `/api/equity-stockIndices?index=NIFTY%20500` (batch live prices for all Nifty 500)
+    - `/api/quote-equity?symbol=...` (single-symbol fallback pricing path)
+  - Raw fields used: `lastPrice`, `previousClose`, `dayHigh`, `dayLow`, `totalTradedVolume`, etc.
+
+- **Computed inside our code (`market_data.js`)**
+  - `ema9` and `ema21`: computed locally as rolling EMAs from live cycle prices.
+  - `pivotPP`, `pivotR1`, `pivotS1`: computed locally using classic pivot formula from `dayHigh`, `dayLow`, and `previousClose`.
+  - `vwap`: uses NSE's `vwap` when available; otherwise falls back to a typical-price proxy `((dayHigh + dayLow + price) / 3)`.
+
+### Important behavior
+
+- On a cold start, EMA values initialize from the latest price; they become more meaningful after a few cycles.
+- Indicator cache is in-memory per Cloud Function instance; values can reset on instance restart/scale events.
+
+### Deployment note
+
+Yes — after changing `market_data.js` or `claude_trader.js`, you must redeploy functions:
+
+```bash
+cd trading_app/functions && firebase deploy --only functions
+```
