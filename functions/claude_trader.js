@@ -1,7 +1,7 @@
 /**
  * functions/claude_trader.js
  * ==========================
- * Calls Claude claude-sonnet-4-20250514 via Anthropic API to make all trade decisions.
+ * Calls Claude claude-sonnet-4-6 via Anthropic API to make all trade decisions.
  *
  * PURPOSE:
  *   ARJUN's "brain." Every 5 minutes this module sends Claude:
@@ -22,7 +22,7 @@
  *     firebase functions:config:set anthropic.api_key="sk-ant-..."
  *
  * CRITICAL RULES:
- *   - Claude model MUST be claude-sonnet-4-20250514
+ *   - Claude model MUST be claude-sonnet-4-6
  *   - The prompt NEVER contains hardcoded stock symbols
  *   - All stock symbols in the prompt come from live topMovers data
  *   - Parse errors NEVER crash the trading loop — returns WAIT decision
@@ -73,28 +73,15 @@ function getCurrentISTString() {
 // System prompt — ARJUN's persona
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt() {
-  return `You are ARJUN — a professional NSE stock trader AI with 20 years of experience. You are data-driven, unemotional, and disciplined.
+  return `You are ARJUN — a professional NSE intraday trader AI. You are data-driven, unemotional, and disciplined. Capital protection always comes first.
 
-You NEVER trade a fixed list of stocks. You trade whatever the live market data shows as the best opportunity RIGHT NOW.
-Your decisions are based on BOTH the live technical data provided AND the latest news you search for.
+You trade ONLY from the live data provided each cycle. Never invent or hardcode stock symbols.
+You understand Indian markets: NSE 09:15–15:30 IST, FII/DII flows, sector rotation, intraday momentum.
 
-You understand Indian markets deeply: NSE trading hours (09:15–15:30 IST), F&O expiry effects, FII/DII flows, sector rotation, and intraday momentum patterns.
-
-You always protect capital first. A small loss today is better than a large loss tomorrow.
-
-BEFORE making any trade decision, you MUST use your web_search tool to check latest news. Search for:
-1. "NSE India stock market news today" — for overall market sentiment
-2. For any stock you are considering BUYing: search "[STOCK NAME] NSE news today" — check for negative news, fraud, results, or bans
-3. For any stock you are currently HOLDing: search "[STOCK NAME] latest news" — check for exit signals
-4. "India FII DII data today NSE" — check institutional flows
-
-Use these news sources in priority order: moneycontrol.com, economictimes.indiatimes.com, livemint.com, business-standard.com, nseindia.com.
-
-CRITICAL NEWS RULES:
-- If a stock has negative news (fraud, SEBI ban, results miss, promoter selling) — DO NOT BUY, or SELL immediately if holding
-- If a stock has strong positive news (strong results, large order win, FII buying) — it strengthens a BUY signal
-- If overall market news is very negative (global crash, budget shock, RBI surprise rate hike) — go DEFENSIVE mode regardless of technicals
-- Never ignore news in favour of technicals alone — both must align for a BUY`;
+NEWS: Use web_search ONCE with "NSE India stock market news today" to get macro context.
+- Negative macro news (global crash, RBI shock, SEBI action) → defensive mode, sell only
+- Positive macro news strengthens BUY signals
+- Do NOT run multiple searches — one broad search is enough for each cycle`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -121,8 +108,12 @@ function buildUserPrompt(marketData, portfolio) {
       ? JSON.stringify(holdings, null, 2)
       : "  (No current holdings — fully in cash)";
 
-  // Format top movers (remove internal _score field if present)
-  const topMoversClean = (topMovers || []).map(({ _score, ...rest }) => rest);
+  // Top 10 movers with all trading-relevant fields
+  const topMoversClean = (topMovers || []).slice(0, 10).map(({ symbol, price, changePct, volume, avgVolume, volumeRatio, ma50, dayHigh, dayLow, high52w, low52w }) => ({
+    symbol, price, changePct,
+    volume, avgVolume, volumeRatio,
+    ma50, dayHigh, dayLow, high52w, low52w,
+  }));
   const topMoversStr = JSON.stringify(topMoversClean, null, 2);
 
   // Index data
@@ -188,11 +179,10 @@ MARKET CONDITIONS:
 - After 3:00 PM IST: close all positions, no new buys
 
 YOUR TASK THIS CYCLE:
-1. FIRST — use web_search to check: "NSE India stock market news today" for macro sentiment
-2. Review each holding — search for latest news on each held stock — should anything be sold?
-3. Scan the live top movers — search for news on top candidates before deciding to buy
-4. Combine technicals + news to make your final decision
-5. Return your decision in the exact JSON below
+1. Use web_search ONCE: "NSE India stock market news today" — get macro picture
+2. Review holdings against exit rules
+3. Pick best BUY from top movers if entry rules are met
+4. Return decision in exact JSON below
 
 Respond ONLY with this JSON, no extra text, no markdown:
 {
@@ -348,17 +338,17 @@ async function getTradeDecision(marketData, portfolio) {
   const systemPrompt = buildSystemPrompt();
   const userPrompt   = buildUserPrompt(marketData, portfolio);
 
-  logger.info("Calling Claude claude-sonnet-4-20250514 with web_search enabled...");
+  logger.info("Calling Claude claude-sonnet-4-6 with web_search enabled...");
 
   try {
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       tools: [
         {
-          type: "web_search_20250305",
+          type: "web_search_20260209",
           name: "web_search",
-          max_uses: 5,
+          max_uses: 1,
         },
       ],
       messages: [

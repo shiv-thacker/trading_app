@@ -114,7 +114,7 @@ class _MarketStatusBarState extends State<MarketStatusBar>
             animation: _pulseController,
             builder: (_, __) {
               final pulse = isOpen
-                  ? (0.4 + 0.6 * sin(_pulseController.value * 2 * pi))
+                  ? ((sin(_pulseController.value * 2 * pi) + 1) / 2)
                   : 0.3;
               return Container(
                 width: 10,
