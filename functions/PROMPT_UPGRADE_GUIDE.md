@@ -7,55 +7,74 @@ This file documents every cut so you can restore them when you upgrade your plan
 
 ---
 
-## Current token budget (post-trim)
+## Current token budget
 
-| Component                   | Approx tokens |
-|-----------------------------|---------------|
-| System prompt               | ~120          |
-| Portfolio state             | ~150          |
-| Index data (6 indices)      | ~80           |
-| Top 10 movers (11 fields)   | ~600          |
-| Trading rules + JSON schema | ~400          |
-| **Base input total**        | **~1,350**    |
-| + 1 web search result       | ~800          |
-| **Total per cycle**         | **~2,150**    |
+| Component                        | Approx tokens |
+|----------------------------------|---------------|
+| System prompt (full persona)     | ~250          |
+| Portfolio state                  | ~150          |
+| Index data (6 indices)           | ~80           |
+| Top 20 movers (13 fields each)   | ~1,400        |
+| Trading rules + JSON schema      | ~450          |
+| **Total input per cycle**        | **~2,330**    |
+| Output (JSON decision)           | ~500          |
+| **Total per cycle**              | **~2,830**    |
+| API calls per cycle              | **1** (no tool use) |
+
+> Web search was fully removed — it caused 35k–46k tokens per cycle because
+> Anthropic's tool returns entire article pages (~15,000–20,000 tokens each).
+> The live NSE data fed directly to Claude is more accurate for intraday trading anyway.
+> At ~2,830 tokens/cycle this is well within the 30,000 tokens/min free tier limit.
 
 ---
 
-## Change 1 — Web search `max_uses`: 5 → 1
+## Change 1 — Web search: removed entirely (was 5, then 1, then 0)
 
 **File:** `claude_trader.js`  
 **Location:** inside `getTradeDecision()`, the `tools` array
 
-### Current (trimmed)
+### Current (removed)
 ```js
-tools: [
-  {
-    type: "web_search_20260209",
-    name: "web_search",
-    max_uses: 1,
-  },
-],
+// No tools array — web search completely disabled
+const message = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: userPrompt }],
+  system: systemPrompt,
+});
 ```
 
 ### Original (full intelligence)
 ```js
-tools: [
-  {
-    type: "web_search_20260209",
-    name: "web_search",
-    max_uses: 5,
-  },
-],
+const message = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  max_tokens: 4096,
+  tools: [
+    {
+      type: "web_search_20260209",
+      name: "web_search",
+      max_uses: 5,
+    },
+  ],
+  messages: [{ role: "user", content: userPrompt }],
+  system: systemPrompt,
+});
 ```
 
-**What you lose at max_uses: 1:**
-- Claude can no longer search for news on individual stocks it's considering buying
-- Cannot check latest news on stocks currently held (exit signals from news)
-- Cannot check FII/DII flow data separately
-- Each search result adds ~800 tokens to context — 5 searches = ~4,000 extra tokens/cycle
+**Why it was removed:**
+Each web_search creates 2 API calls — the first sends your prompt (~2k tokens), the
+second sends your prompt + the full search result page (~15,000–20,000 tokens from
+news sites like Economic Times / Moneycontrol). One cycle was costing 35k–46k tokens,
+hitting the 30k/min rate limit constantly.
 
-**When to restore:** Upgrade to Anthropic's **Scale** or **Build** tier (100k+ tokens/min).
+**What you lose without web search:**
+- Claude cannot check latest news on stocks it's considering buying
+- Cannot detect fraud alerts / SEBI bans / earnings misses on the same day they happen
+- Cannot check FII/DII flow data
+- Decisions are purely technical (live price, volume, momentum data)
+
+**When to restore:** Upgrade to Anthropic **Build** tier (100k tokens/min).
+Also restore `max_tokens: 4096` at the same time.
 
 ---
 

@@ -73,15 +73,21 @@ function getCurrentISTString() {
 // System prompt — ARJUN's persona
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt() {
-  return `You are ARJUN — a professional NSE intraday trader AI. You are data-driven, unemotional, and disciplined. Capital protection always comes first.
+  return `You are ARJUN — a professional NSE stock trader AI with 20 years of experience. You are data-driven, unemotional, and disciplined.
 
-You trade ONLY from the live data provided each cycle. Never invent or hardcode stock symbols.
-You understand Indian markets: NSE 09:15–15:30 IST, FII/DII flows, sector rotation, intraday momentum.
+You NEVER trade a fixed list of stocks. You trade whatever the live market data shows as the best opportunity RIGHT NOW.
+You understand Indian markets deeply: NSE trading hours (09:15–15:30 IST), F&O expiry effects, FII/DII flows, sector rotation, and intraday momentum patterns.
 
-NEWS: Use web_search ONCE with "NSE India stock market news today" to get macro context.
-- Negative macro news (global crash, RBI shock, SEBI action) → defensive mode, sell only
-- Positive macro news strengthens BUY signals
-- Do NOT run multiple searches — one broad search is enough for each cycle`;
+You always protect capital first. A small loss today is better than a large loss tomorrow.
+
+You make all decisions purely from the live real-time NSE data provided each cycle — price, volume, momentum, and index levels. This data is fetched directly from NSE and is more accurate and timely than any external source for intraday decisions.
+
+CRITICAL RULES:
+- Never invent or hardcode stock symbols — only trade what appears in the live top movers data
+- Volume ratio (volumeRatio) above 1.5x is a strong confirmation signal — prioritise it
+- Price above ma50 confirms the stock is in an uptrend — required for BUY
+- A stock near its 52-week high (price > 90% of high52w) is in breakout territory — high conviction
+- Never ignore the Nifty 50 trend — if it is down >1%, go defensive regardless of individual signals`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -108,9 +114,10 @@ function buildUserPrompt(marketData, portfolio) {
       ? JSON.stringify(holdings, null, 2)
       : "  (No current holdings — fully in cash)";
 
-  // Top 10 movers with all trading-relevant fields
-  const topMoversClean = (topMovers || []).slice(0, 10).map(({ symbol, price, changePct, volume, avgVolume, volumeRatio, ma50, dayHigh, dayLow, high52w, low52w }) => ({
-    symbol, price, changePct,
+  // All 20 top movers with full trading-relevant fields
+  const topMoversClean = (topMovers || []).map(({ symbol, companyName, sector, price, changePct, volume, avgVolume, volumeRatio, ma50, dayHigh, dayLow, high52w, low52w }) => ({
+    symbol, companyName, sector,
+    price, changePct,
     volume, avgVolume, volumeRatio,
     ma50, dayHigh, dayLow, high52w, low52w,
   }));
@@ -179,10 +186,11 @@ MARKET CONDITIONS:
 - After 3:00 PM IST: close all positions, no new buys
 
 YOUR TASK THIS CYCLE:
-1. Use web_search ONCE: "NSE India stock market news today" — get macro picture
-2. Review holdings against exit rules
-3. Pick best BUY from top movers if entry rules are met
-4. Return decision in exact JSON below
+1. Assess the market mood from Nifty 50 change% and sector indices
+2. Review each current holding against the exit rules — should anything be sold?
+3. Scan all top movers — check changePct, volumeRatio, ma50, and 52w position for each
+4. Pick the best BUY opportunity if ALL entry conditions are met, otherwise wait
+5. Return your decision in the exact JSON below
 
 Respond ONLY with this JSON, no extra text, no markdown:
 {
@@ -343,14 +351,7 @@ async function getTradeDecision(marketData, portfolio) {
   try {
     const message = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      tools: [
-        {
-          type: "web_search_20260209",
-          name: "web_search",
-          max_uses: 1,
-        },
-      ],
+      max_tokens: 2048,
       messages: [
         { role: "user", content: userPrompt },
       ],
