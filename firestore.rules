@@ -2,6 +2,52 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ── Intraday portfolio ───────────────────────────────────
+    match /portfolio/state {
+      allow read: if true;
+      allow write: if false; // server-only via Admin SDK
+    }
+    match /portfolio/state/snapshots/{snap} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Intraday trades ──────────────────────────────────────
+    match /trades/{trade} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Intraday AI logs ─────────────────────────────────────
+    match /ai_logs/{log} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Swing portfolio ──────────────────────────────────────
+    match /swing_portfolio/state {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /swing_portfolio/state/snapshots/{snap} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Swing trades ─────────────────────────────────────────
+    match /swing_trades/{trade} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Swing AI logs ────────────────────────────────────────
+    match /swing_ai_logs/{log} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Deny everything else
     match /{document=**} {
       allow read, write: if false;
     }

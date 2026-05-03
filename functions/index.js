@@ -58,6 +58,17 @@ const {
   calculateUnrealizedPnL,
 } = require("./firestore_manager");
 
+// ── Swing trading modules ────────────────────────────────────
+const { getSwingDecision } = require("./swing_trader");
+const {
+  getSwingPortfolioState,
+  saveSwingPortfolioState,
+  recordSwingTrade,
+  recordSwingSnapshot,
+  recordSwingAILog,
+  calculateSwingUnrealizedPnL,
+} = require("./swing_manager");
+
 // ─────────────────────────────────────────────────────────────
 // Market Hours Helpers
 // ─────────────────────────────────────────────────────────────
@@ -506,6 +517,254 @@ exports.resetPortfolio = functions
   });
 
 // ─────────────────────────────────────────────────────────────
+// Swing Trade Validation
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Validates a swing BUY trade against swing portfolio limits.
+ * More conservative than intraday — max 3 holdings, 40% caps.
+ */
+function canSwingBuy(trade, portfolio) {
+  const { cash, totalValue, holdings } = portfolio;
+  const CASH_RESERVE  = 1000;
+  const MAX_HOLDINGS  = 3;
+  const MAX_CASH_PCT  = 0.40;
+  const MAX_PORTF_PCT = 0.40;
+
+  if (holdings.length >= MAX_HOLDINGS) {
+    logger.info(`SWING BUY blocked: already at max holdings (${MAX_HOLDINGS})`);
+    return false;
+  }
+
+  if (holdings.some((h) => h.symbol === trade.symbol)) {
+    logger.info(`SWING BUY blocked: already holding ${trade.symbol}`);
+    return false;
+  }
+
+  const needed = trade.totalAmount + CASH_RESERVE;
+  if (cash < needed) {
+    logger.info(`SWING BUY blocked: insufficient cash (need ₹${needed.toFixed(0)}, have ₹${cash.toFixed(0)})`);
+    return false;
+  }
+
+  if (trade.totalAmount > cash * MAX_CASH_PCT) {
+    logger.info(`SWING BUY blocked: trade exceeds 40% of available cash`);
+    return false;
+  }
+
+  if (trade.totalAmount > totalValue * MAX_PORTF_PCT) {
+    logger.info(`SWING BUY blocked: trade exceeds 40% of portfolio value`);
+    return false;
+  }
+
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Core Swing Trading Cycle
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Full swing trading cycle — runs every hour.
+ *
+ * Unlike intraday, this cycle runs 24/7 for analysis but only executes
+ * trades during NSE market hours (09:15–15:30 IST).
+ * Web search gives Claude live Indian financial news context.
+ */
+async function runSwingTradingCycle() {
+  logger.info("=== ARJUN Swing Trading Cycle Started ===");
+
+  // ── STEP 1: Read swing portfolio ────────────────────────────
+  let portfolio;
+  try {
+    portfolio = await getSwingPortfolioState();
+    logger.info(`Swing portfolio: cash=₹${portfolio.cash?.toFixed(0)}, holdings=${portfolio.holdings?.length}`);
+  } catch (err) {
+    logger.error("Failed to read swing portfolio:", err.message);
+    return { status: "ERROR", error: err.message };
+  }
+
+  // ── STEP 2: Fetch live market data ──────────────────────────
+  let marketOverview, topMovers;
+  try {
+    [marketOverview, topMovers] = await Promise.all([
+      getMarketOverview(),
+      getTopMovers(),
+    ]);
+    logger.info(`Swing market: Nifty ${marketOverview.nifty50?.changePct}%, mood=${marketOverview.marketMood}`);
+  } catch (err) {
+    logger.error("Swing failed to fetch market data:", err.message);
+    await recordSwingAILog({
+      timestamp:       Date.now(),
+      marketAnalysis:  `Market data fetch failed: ${err.message}`,
+      thoughts:        [`Error fetching live data: ${err.message}`],
+      portfolioHealth: "OK",
+      marketSentiment: "NEUTRAL",
+      nextFocus:       "Retry next hourly cycle.",
+      tradeCount:      0,
+      cycleStatus:     "WAITED",
+      webSearchUsed:   false,
+    });
+    return { status: "ERROR", error: err.message };
+  }
+
+  // ── STEP 3: Update unrealized P&L on swing holdings ─────────
+  if (portfolio.holdings.length > 0) {
+    try {
+      const symbols       = portfolio.holdings.map((h) => h.symbol);
+      const currentPrices = await getCurrentPrices(symbols);
+      portfolio.holdings  = calculateSwingUnrealizedPnL(portfolio.holdings, currentPrices);
+      logger.info(`Swing: updated prices for ${symbols.length} holdings`);
+    } catch (err) {
+      logger.warn("Swing: could not update holding prices (non-fatal):", err.message);
+    }
+  }
+
+  // ── STEP 4: Call Claude with web_search for swing decision ──
+  let decision;
+  let webSearchUsed = false;
+  try {
+    const result = await getSwingDecision(
+      { marketOverview, topMovers },
+      portfolio
+    );
+    decision      = result.decision;
+    webSearchUsed = result.webSearchUsed;
+    logger.info(`Swing Claude: ${decision.trades?.length} trades, sentiment=${decision.marketSentiment}, webSearch=${webSearchUsed}`);
+  } catch (err) {
+    logger.error("Swing Claude call failed:", err.message);
+    decision = {
+      market_analysis: `Swing AI error: ${err.message}`,
+      trades:          [],
+      portfolioHealth: "OK",
+      nextFocus:       "Retry next cycle.",
+      marketSentiment: "NEUTRAL",
+      aiThoughts:      [`Swing AI error: ${err.message}`],
+    };
+  }
+
+  // ── STEP 5: Execute swing trades (only during market hours) ─
+  const executedTrades = [];
+  const marketOpen = isMarketOpen();
+
+  for (const trade of decision.trades || []) {
+
+    if (trade.action === "BUY") {
+      if (!marketOpen) {
+        logger.info(`SWING BUY ${trade.symbol} skipped — market is closed`);
+        continue;
+      }
+
+      if (canSwingBuy(trade, portfolio)) {
+        portfolio.cash -= trade.totalAmount;
+
+        portfolio.holdings.push({
+          symbol:           trade.symbol,
+          companyName:      trade.companyName  || trade.symbol,
+          sector:           trade.sector       || "Unknown",
+          quantity:         trade.quantity,
+          avgBuyPrice:      trade.price,
+          currentPrice:     trade.price,
+          unrealizedPnl:    0,
+          unrealizedPnlPct: 0,
+          buyTimestamp:     Date.now(),
+          stopLoss:         trade.stopLoss     || trade.price * 0.93,
+          target:           trade.target       || trade.price * 1.22,
+          cyclesHeld:       0,
+        });
+
+        await recordSwingTrade({
+          ...trade,
+          marketSentiment:     decision.marketSentiment,
+          portfolioValueAfter: portfolio.totalValue,
+          newsContext:         trade.newsContext || "",
+        });
+
+        executedTrades.push({ action: "BUY", symbol: trade.symbol });
+        logger.info(`SWING BUY executed: ${trade.symbol} × ${trade.quantity} @ ₹${trade.price}`);
+      }
+
+    } else if (trade.action === "SELL") {
+      const holding = portfolio.holdings.find((h) => h.symbol === trade.symbol);
+
+      if (holding) {
+        if (!marketOpen) {
+          logger.info(`SWING SELL ${trade.symbol} skipped — market is closed (will retry next open)`);
+          continue;
+        }
+
+        const sellAmount = trade.price * holding.quantity;
+        const pnl        = (trade.price - holding.avgBuyPrice) * holding.quantity;
+        const pnlPct     = ((trade.price - holding.avgBuyPrice) / holding.avgBuyPrice) * 100;
+        const holdDays   = Math.floor((Date.now() - (holding.buyTimestamp || Date.now())) / (1000 * 60 * 60 * 24));
+
+        portfolio.cash += sellAmount;
+        portfolio.holdings = portfolio.holdings.filter((h) => h.symbol !== trade.symbol);
+
+        await recordSwingTrade({
+          ...trade,
+          quantity:            holding.quantity,
+          totalAmount:         sellAmount,
+          pnl:                 Math.round(pnl * 100) / 100,
+          pnlPct:              Math.round(pnlPct * 100) / 100,
+          marketSentiment:     decision.marketSentiment,
+          portfolioValueAfter: portfolio.totalValue,
+          holdDays,
+          newsContext:         trade.newsContext || "",
+        });
+
+        executedTrades.push({ action: "SELL", symbol: trade.symbol, pnl });
+        logger.info(`SWING SELL executed: ${trade.symbol} × ${holding.quantity} @ ₹${trade.price}, P&L: ₹${pnl.toFixed(2)}, days held: ${holdDays}`);
+      } else {
+        logger.warn(`SWING SELL ${trade.symbol} skipped — not in holdings`);
+      }
+    }
+  }
+
+  // ── STEP 6: Increment cyclesHeld for all swing holdings ─────
+  portfolio.holdings = portfolio.holdings.map((h) => ({
+    ...h,
+    cyclesHeld: (h.cyclesHeld || 0) + 1,
+  }));
+
+  // ── STEP 7: Recalculate total portfolio value ────────────────
+  const holdingsValue = portfolio.holdings.reduce(
+    (sum, h) => sum + (h.currentPrice * h.quantity),
+    0
+  );
+  portfolio.totalValue = Math.round((portfolio.cash + holdingsValue) * 100) / 100;
+
+  // ── STEP 8: Persist to Firestore ────────────────────────────
+  try {
+    await saveSwingPortfolioState(portfolio);
+    await recordSwingSnapshot(portfolio);
+    await recordSwingAILog({
+      timestamp:       Date.now(),
+      marketAnalysis:  decision.market_analysis,
+      thoughts:        decision.aiThoughts || [],
+      portfolioHealth: decision.portfolioHealth,
+      marketSentiment: decision.marketSentiment,
+      nextFocus:       decision.nextFocus,
+      tradeCount:      executedTrades.length,
+      cycleStatus:     executedTrades.length > 0 ? "TRADED" : (marketOpen ? "WAITED" : "ANALYSING"),
+      webSearchUsed,
+    });
+  } catch (err) {
+    logger.error("Failed to save swing cycle results:", err.message);
+  }
+
+  logger.info(`=== Swing cycle complete. Trades: ${executedTrades.length}, Portfolio: ₹${portfolio.totalValue}, webSearch: ${webSearchUsed} ===`);
+
+  return {
+    status:         executedTrades.length > 0 ? "TRADED" : "WAITED",
+    tradesExecuted: executedTrades.length,
+    portfolioValue: portfolio.totalValue,
+    sentiment:      decision.marketSentiment,
+    webSearchUsed,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // FUNCTION 4: runDummyTradeTest — HTTPS Callable (Settings screen)
 // ─────────────────────────────────────────────────────────────
 /**
@@ -566,6 +825,115 @@ exports.runDummyTradeTest = functions
       };
     } catch (err) {
       logger.error("runDummyTradeTest failed:", err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 5: swingLoop — Scheduled every hour
+// ─────────────────────────────────────────────────────────────
+/**
+ * Runs the swing trading cycle every hour during market hours.
+ * Claude uses web_search to browse Indian financial news.
+ * Runs 09:00–15:00 IST, Monday–Friday (same window as NSE session).
+ * The intraday market-hours guard ensures trades only execute 09:15–15:30.
+ */
+exports.swingLoop = functions
+  .runWith({
+    timeoutSeconds: 540,
+    memory: "512MB",
+  })
+  .pubsub
+  .schedule("0 9-15 * * 1-5")
+  .timeZone("Asia/Kolkata")
+  .onRun(async () => {
+    try {
+      await runSwingTradingCycle();
+    } catch (err) {
+      logger.error("Unhandled error in swingLoop:", err);
+    }
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 6: manualSwingTrigger — HTTPS Callable from Flutter
+// ─────────────────────────────────────────────────────────────
+/**
+ * Manually trigger one swing trading cycle from the Settings screen.
+ * Useful for testing web search and swing logic without waiting an hour.
+ */
+exports.manualSwingTrigger = functions
+  .runWith({
+    timeoutSeconds: 540,
+    memory: "512MB",
+  })
+  .https
+  .onCall(async (data, context) => {
+    logger.info("Manual swing trigger called from Flutter app");
+    try {
+      const result = await runSwingTradingCycle();
+      return { success: true, result };
+    } catch (err) {
+      logger.error("manualSwingTrigger error:", err);
+      return { success: false, error: err.message };
+    }
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 7: resetSwingPortfolio — HTTPS Callable (Settings screen)
+// ─────────────────────────────────────────────────────────────
+/**
+ * Resets the swing portfolio to ₹10,000 and clears all swing history.
+ * Only executes when market is closed (safety guard).
+ */
+exports.resetSwingPortfolio = functions
+  .runWith({ timeoutSeconds: 120 })
+  .https
+  .onCall(async (data, context) => {
+    logger.info("Swing portfolio reset requested");
+
+    if (isMarketOpen()) {
+      return {
+        success: false,
+        error: "Cannot reset during market hours. Please try after 15:30 IST.",
+      };
+    }
+
+    try {
+      const db = admin.firestore();
+      const batch = db.batch();
+
+      // Delete all swing trades
+      const trades = await db.collection("swing_trades").get();
+      trades.docs.forEach((doc) => batch.delete(doc.ref));
+
+      // Delete all swing ai_logs
+      const logs = await db.collection("swing_ai_logs").get();
+      logs.docs.forEach((doc) => batch.delete(doc.ref));
+
+      // Delete all swing snapshots
+      const snapshots = await db
+        .collection("swing_portfolio")
+        .doc("state")
+        .collection("snapshots")
+        .get();
+      snapshots.docs.forEach((doc) => batch.delete(doc.ref));
+
+      await batch.commit();
+
+      // Re-initialize swing portfolio
+      await db.collection("swing_portfolio").doc("state").set({
+        cash:            10000,
+        totalValue:      10000,
+        startingCapital: 10000,
+        holdings:        [],
+        lastUpdated:     admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info("Swing portfolio reset to ₹10,000");
+      return { success: true, message: "Swing portfolio reset to ₹10,000 successfully." };
+    } catch (err) {
+      logger.error("resetSwingPortfolio failed:", err.message);
       return { success: false, error: err.message };
     }
   });

@@ -61,8 +61,11 @@ class Holding {
   double get targetPct =>
       ((target - avgBuyPrice) / avgBuyPrice) * 100;
 
-  /// How many minutes this position has been held (each cycle = 5 min)
+  /// How many minutes this position has been held (intraday: each cycle = 5 min)
   int get minutesHeld => cyclesHeld * 5;
+
+  /// How many days this position has been held (swing: uses actual buy timestamp)
+  int get daysHeld => DateTime.now().difference(buyTime).inDays;
 
   DateTime get buyTime => DateTime.fromMillisecondsSinceEpoch(buyTimestamp);
 

@@ -30,7 +30,7 @@ import '../widgets/market_status_bar.dart';
 import '../widgets/portfolio_chart.dart';
 
 // ─────────────────────────────────────────────────────────────
-// Riverpod stream providers
+// Riverpod stream providers — Intraday
 // ─────────────────────────────────────────────────────────────
 
 final portfolioProvider = StreamProvider<Portfolio>((ref) {
@@ -46,6 +46,18 @@ final snapshotsProvider = StreamProvider<List<Snapshot>>((ref) {
 });
 
 // ─────────────────────────────────────────────────────────────
+// Riverpod stream providers — Swing
+// ─────────────────────────────────────────────────────────────
+
+final swingPortfolioDashProvider = StreamProvider<Portfolio>((ref) {
+  return ref.read(firestoreServiceProvider).swingPortfolioStream();
+});
+
+final swingAiLogsDashProvider = StreamProvider<List<AILog>>((ref) {
+  return ref.read(firestoreServiceProvider).swingAiLogsStream();
+});
+
+// ─────────────────────────────────────────────────────────────
 // DashboardScreen
 // ─────────────────────────────────────────────────────────────
 class DashboardScreen extends ConsumerWidget {
@@ -53,13 +65,17 @@ class DashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final portfolioAsync = ref.watch(portfolioProvider);
-    final logsAsync      = ref.watch(aiLogsProvider);
-    final snapshotsAsync = ref.watch(snapshotsProvider);
+    final portfolioAsync      = ref.watch(portfolioProvider);
+    final logsAsync           = ref.watch(aiLogsProvider);
+    final snapshotsAsync      = ref.watch(snapshotsProvider);
+    final swingPortfolioAsync = ref.watch(swingPortfolioDashProvider);
+    final swingLogsAsync      = ref.watch(swingAiLogsDashProvider);
 
-    final latestLog = logsAsync.valueOrNull?.firstOrNull;
-    final portfolio = portfolioAsync.valueOrNull ?? Portfolio.empty();
-    final snapshots = snapshotsAsync.valueOrNull ?? [];
+    final latestLog     = logsAsync.valueOrNull?.firstOrNull;
+    final latestSwingLog = swingLogsAsync.valueOrNull?.firstOrNull;
+    final portfolio     = portfolioAsync.valueOrNull ?? Portfolio.empty();
+    final swingPortfolio = swingPortfolioAsync.valueOrNull ?? Portfolio.empty();
+    final snapshots     = snapshotsAsync.valueOrNull ?? [];
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -173,6 +189,15 @@ class DashboardScreen extends ConsumerWidget {
                       height:          180,
                     ),
                   ),
+
+                  const SizedBox(height: 28),
+
+                  // ── Swing portfolio section ───────────────
+                  _SwingSection(
+                    portfolio: swingPortfolio,
+                    latestLog: latestSwingLog,
+                  ),
+
                   const SizedBox(height: 32),
                 ],
               ),
@@ -575,6 +600,313 @@ class _SentimentChip extends StatelessWidget {
       case 'VOLATILE': return const Color(0xFFFFA726);
       default:         return const Color(0xFF607D8B);
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Swing Portfolio Section (Dashboard)
+// ─────────────────────────────────────────────────────────────
+class _SwingSection extends StatelessWidget {
+  final Portfolio portfolio;
+  final AILog? latestLog;
+
+  const _SwingSection({required this.portfolio, this.latestLog});
+
+  @override
+  Widget build(BuildContext context) {
+    final pnlTotal = portfolio.totalPnl;
+    final pnlPct   = portfolio.totalPnlPct;
+    final isProfit = pnlTotal >= 0;
+    final pnlColor = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Section header
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Text(
+                '📈 SWING TRADING',
+                style: GoogleFonts.jetBrainsMono(
+                  color: Colors.grey.shade500,
+                  fontSize: 11,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7C4DFF).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF7C4DFF).withOpacity(0.3)),
+                ),
+                child: Text(
+                  'HOURLY · WEB SEARCH',
+                  style: GoogleFonts.jetBrainsMono(
+                    color: const Color(0xFF7C4DFF),
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // Swing portfolio card
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF161B22),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: const Color(0xFF7C4DFF).withOpacity(0.2),
+            ),
+          ),
+          child: Column(
+            children: [
+              // Value + P&L row
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'SWING VALUE',
+                        style: GoogleFonts.jetBrainsMono(
+                          color: Colors.grey.shade600,
+                          fontSize: 9,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _formatINR(portfolio.totalValue),
+                        style: GoogleFonts.jetBrainsMono(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '${isProfit ? '+' : ''}${_formatINR(pnlTotal)}',
+                        style: GoogleFonts.jetBrainsMono(
+                          color: pnlColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: pnlColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '${isProfit ? '+' : ''}${pnlPct.toStringAsFixed(2)}%',
+                          style: GoogleFonts.jetBrainsMono(
+                            color: pnlColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 12),
+
+              // Stats row
+              Row(
+                children: [
+                  _SwingStatChip(
+                    label: 'POSITIONS',
+                    value: '${portfolio.holdings.length}/3',
+                    color: const Color(0xFF7C4DFF),
+                  ),
+                  const SizedBox(width: 8),
+                  _SwingStatChip(
+                    label: 'CASH',
+                    value: _formatINR(portfolio.cash),
+                    color: const Color(0xFF607D8B),
+                  ),
+                  const Spacer(),
+                  if (latestLog != null) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _sentimentColor(latestLog!.marketSentiment).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _sentimentColor(latestLog!.marketSentiment).withOpacity(0.3),
+                        ),
+                      ),
+                      child: Text(
+                        latestLog!.marketSentiment,
+                        style: GoogleFonts.jetBrainsMono(
+                          color: _sentimentColor(latestLog!.marketSentiment),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+
+              // Latest swing log analysis
+              if (latestLog != null && latestLog!.marketAnalysis.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white.withOpacity(0.04)),
+                  ),
+                  child: Text(
+                    latestLog!.marketAnalysis,
+                    style: TextStyle(
+                      color: Colors.grey.shade400,
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+
+              // Swing holdings (compact)
+              if (portfolio.holdings.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                ...portfolio.holdings.map((h) => _SwingHoldingRow(holding: h)),
+              ] else ...[
+                const SizedBox(height: 8),
+                Text(
+                  'No swing positions — watching for multi-day setups...',
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _sentimentColor(String s) {
+    switch (s) {
+      case 'BULLISH':  return const Color(0xFF00C853);
+      case 'BEARISH':  return const Color(0xFFFF3B30);
+      case 'VOLATILE': return const Color(0xFFFFA726);
+      default:         return const Color(0xFF607D8B);
+    }
+  }
+}
+
+class _SwingStatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _SwingStatChip({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.jetBrainsMono(
+              color: color.withOpacity(0.7),
+              fontSize: 8,
+              letterSpacing: 0.5,
+            ),
+          ),
+          Text(
+            value,
+            style: GoogleFonts.jetBrainsMono(
+              color: Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SwingHoldingRow extends StatelessWidget {
+  final Holding holding;
+  const _SwingHoldingRow({required this.holding});
+
+  @override
+  Widget build(BuildContext context) {
+    final isProfit = holding.isProfit;
+    final pnlColor = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Text(
+            holding.symbol,
+            style: GoogleFonts.jetBrainsMono(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${holding.daysHeld}d',
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+          ),
+          const Spacer(),
+          Text(
+            '${isProfit ? '+' : ''}${holding.unrealizedPnlPct.toStringAsFixed(2)}%',
+            style: GoogleFonts.jetBrainsMono(
+              color: pnlColor,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${isProfit ? '+' : ''}${_formatINR(holding.unrealizedPnl)}',
+            style: GoogleFonts.jetBrainsMono(
+              color: pnlColor,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

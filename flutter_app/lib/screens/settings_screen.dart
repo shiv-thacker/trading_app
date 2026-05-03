@@ -24,9 +24,11 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  bool _isTriggering = false;
-  bool _isResetting  = false;
-  bool _isDummyTrading = false;
+  bool _isTriggering      = false;
+  bool _isResetting       = false;
+  bool _isDummyTrading    = false;
+  bool _isSwingTriggering = false;
+  bool _isSwingResetting  = false;
 
   // ── Manual trigger ──────────────────────────────────────────
   Future<void> _runManualCycle() async {
@@ -119,6 +121,77 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  // ── Swing manual trigger ────────────────────────────────────
+  Future<void> _runSwingCycle() async {
+    setState(() => _isSwingTriggering = true);
+    final result = await ref.read(firestoreServiceProvider).triggerManualSwingCycle();
+    if (!mounted) return;
+    setState(() => _isSwingTriggering = false);
+
+    final success = result['success'] as bool? ?? false;
+    if (success) {
+      final r = result['result'] as Map? ?? {};
+      final webUsed = r['webSearchUsed'] == true ? ' · 🔍 web search' : '';
+      _showSnack(
+        '✅ Swing cycle done: ${r['status'] ?? 'completed'}$webUsed · ₹${(r['portfolioValue'] ?? 0).toStringAsFixed(0)}',
+        color: const Color(0xFF7C4DFF),
+      );
+    } else {
+      _showSnack('❌ ${result['error'] ?? 'Swing trigger failed'}', color: Colors.red);
+    }
+  }
+
+  // ── Swing reset ─────────────────────────────────────────────
+  Future<void> _resetSwingPortfolio() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Reset Swing Portfolio?',
+          style: GoogleFonts.jetBrainsMono(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'This will reset the swing portfolio to ₹10,000 and delete all swing trade history, AI logs, and snapshots.\n\nOnly possible when market is closed.',
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey.shade500)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF7C4DFF),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reset Swing'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isSwingResetting = true);
+    final result = await ref.read(firestoreServiceProvider).resetSwingPortfolio();
+    if (!mounted) return;
+    setState(() => _isSwingResetting = false);
+
+    final success = result['success'] as bool? ?? false;
+    if (success) {
+      _showSnack('✅ Swing portfolio reset to ₹10,000', color: const Color(0xFF7C4DFF));
+    } else {
+      _showSnack('❌ ${result['error'] ?? 'Swing reset failed'}', color: Colors.red);
+    }
+  }
+
   void _showSnack(String msg, {required Color color}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -192,6 +265,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           const SizedBox(height: 24),
 
+          // ── Swing Trading Control ──────────────────────────
+          _SectionHeader(label: 'SWING TRADING CONTROL'),
+          const SizedBox(height: 8),
+
+          _SettingsCard(
+            children: [
+              _ActionTile(
+                icon: Icons.travel_explore_rounded,
+                iconColor: const Color(0xFF7C4DFF),
+                title: 'Run one swing cycle now',
+                subtitle: 'Manually trigger swing AI — uses web search',
+                subtitle2: 'Browses Indian financial news live via Claude',
+                loading: _isSwingTriggering,
+                onTap: _runSwingCycle,
+              ),
+              Divider(color: Colors.white.withOpacity(0.06)),
+              _ActionTile(
+                icon: Icons.restart_alt_rounded,
+                iconColor: const Color(0xFF7C4DFF).withOpacity(0.8),
+                title: 'Reset swing portfolio',
+                subtitle: 'Reset swing to ₹10,000 and clear swing history',
+                subtitle2: 'Only available when market is closed',
+                loading: _isSwingResetting,
+                onTap: _resetSwingPortfolio,
+                destructive: false,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
           // ── About ──────────────────────────────────────────
           _SectionHeader(label: 'ABOUT'),
           const SizedBox(height: 8),
@@ -212,14 +316,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.schedule_rounded,
-                label: 'Trading Cycle',
-                value: 'Every 5 minutes, 09:15–15:30 IST',
+                label: 'Intraday Cycle',
+                value: 'Every 5 min, 09:15–15:30 IST',
+              ),
+              Divider(color: Colors.white.withOpacity(0.06)),
+              _InfoTile(
+                icon: Icons.access_time_rounded,
+                label: 'Swing Cycle',
+                value: 'Every hour, 09:00–15:00 IST',
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.account_balance_wallet_rounded,
-                label: 'Starting Capital',
-                value: '₹10,000 (virtual)',
+                label: 'Capital (each)',
+                value: '₹10,000 intraday + ₹10,000 swing',
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(

@@ -212,8 +212,7 @@ class FirestoreService {
 
   // ── Utility ───────────────────────────────────────────────
 
-  /// Returns the total realized P&L from all SELL trades.
-  /// Used by Portfolio screen for realized gains/losses summary.
+  /// Returns the total realized P&L from all intraday SELL trades.
   Future<double> getTotalRealizedPnL() async {
     try {
       final snap = await _db
@@ -229,6 +228,121 @@ class FirestoreService {
       return total;
     } catch (_) {
       return 0;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // SWING TRADING — Separate collections
+  // ══════════════════════════════════════════════════════════
+
+  // ── Swing Portfolio stream ────────────────────────────────
+
+  /// Real-time stream of the swing_portfolio/state document.
+  Stream<Portfolio> swingPortfolioStream() {
+    return _db
+        .collection('swing_portfolio')
+        .doc('state')
+        .snapshots()
+        .map((snap) {
+          if (!snap.exists) return Portfolio.empty();
+          return Portfolio.fromFirestore(snap);
+        });
+  }
+
+  // ── Swing Trades stream ───────────────────────────────────
+
+  /// Real-time stream of swing trade history.
+  /// [filter] can be null (all), "BUY", or "SELL".
+  Stream<List<Trade>> swingTradesStream({String? filter}) {
+    Query<Map<String, dynamic>> query = _db
+        .collection('swing_trades')
+        .orderBy('timestampMs', descending: true)
+        .limit(100);
+
+    if (filter != null && filter.isNotEmpty) {
+      query = query.where('action', isEqualTo: filter);
+    }
+
+    return query.snapshots().map(
+      (snap) => snap.docs.map(Trade.fromFirestore).toList(),
+    );
+  }
+
+  // ── Swing AI Logs stream ──────────────────────────────────
+
+  /// Real-time stream of swing AI hourly logs (last 30).
+  Stream<List<AILog>> swingAiLogsStream() {
+    return _db
+        .collection('swing_ai_logs')
+        .orderBy('timestampMs', descending: true)
+        .limit(30)
+        .snapshots()
+        .map(
+          (snap) => snap.docs.map(AILog.fromFirestore).toList(),
+        );
+  }
+
+  // ── Swing Snapshots stream ────────────────────────────────
+
+  /// Real-time stream of swing portfolio value snapshots (hourly).
+  Stream<List<Snapshot>> swingSnapshotsStream() {
+    return _db
+        .collection('swing_portfolio')
+        .doc('state')
+        .collection('snapshots')
+        .orderBy('timestampMs', descending: false)
+        .limit(200)
+        .snapshots()
+        .map(
+          (snap) => snap.docs.map(Snapshot.fromFirestore).toList(),
+        );
+  }
+
+  // ── Swing realized P&L ────────────────────────────────────
+
+  Future<double> getSwingRealizedPnL() async {
+    try {
+      final snap = await _db
+          .collection('swing_trades')
+          .where('action', isEqualTo: 'SELL')
+          .get();
+
+      double total = 0;
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        total += (d['pnl'] as num?)?.toDouble() ?? 0;
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // ── Swing Cloud Function calls ────────────────────────────
+
+  /// Manually trigger one swing trading cycle (for testing).
+  Future<Map<String, dynamic>> triggerManualSwingCycle() async {
+    try {
+      final callable = _functions.httpsCallable('manualSwingTrigger');
+      final result = await callable.call();
+      return Map<String, dynamic>.from(result.data as Map);
+    } on FirebaseFunctionsException catch (e) {
+      return {'success': false, 'error': e.message};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Reset swing portfolio to ₹10,000. Only works when market is closed.
+  Future<Map<String, dynamic>> resetSwingPortfolio() async {
+    try {
+      final callable = _functions.httpsCallable('resetSwingPortfolio');
+      final result = await callable.call();
+      return Map<String, dynamic>.from(result.data as Map);
+    } on FirebaseFunctionsException catch (e) {
+      return {'success': false, 'error': e.message};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
     }
   }
 }
