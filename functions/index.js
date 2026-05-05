@@ -620,6 +620,47 @@ async function runSwingTradingCycle() {
     }
   }
 
+  // ── STEP 3b: Auto-enforce stop-loss for swing holdings ──────
+  // If any holding is down ≥7% from buy price, force a SELL regardless of Claude.
+  // This prevents a stock from bleeding further while Claude keeps holding.
+  if (isMarketOpen() && portfolio.holdings.length > 0) {
+    const autoSells = portfolio.holdings.filter((h) => {
+      const pnlPct = ((h.currentPrice - h.avgBuyPrice) / h.avgBuyPrice) * 100;
+      return pnlPct <= -7;
+    });
+
+    for (const h of autoSells) {
+      const sellAmount = h.currentPrice * h.quantity;
+      const pnl        = (h.currentPrice - h.avgBuyPrice) * h.quantity;
+      const pnlPct     = ((h.currentPrice - h.avgBuyPrice) / h.avgBuyPrice) * 100;
+      const holdDays   = Math.floor((Date.now() - (h.buyTimestamp || Date.now())) / (1000 * 60 * 60 * 24));
+
+      portfolio.cash += sellAmount;
+      portfolio.holdings = portfolio.holdings.filter((x) => x.symbol !== h.symbol);
+
+      await recordSwingTrade({
+        action:              "SELL",
+        symbol:              h.symbol,
+        companyName:         h.companyName,
+        sector:              h.sector,
+        quantity:            h.quantity,
+        price:               h.currentPrice,
+        totalAmount:         sellAmount,
+        pnl:                 Math.round(pnl * 100) / 100,
+        pnlPct:              Math.round(pnlPct * 100) / 100,
+        reason:              `Auto stop-loss triggered: stock down ${pnlPct.toFixed(1)}% from buy price ₹${h.avgBuyPrice}`,
+        confidence:          "HIGH",
+        tradeType:           "SWING_STOP_LOSS",
+        marketSentiment:     "NEUTRAL",
+        portfolioValueAfter: portfolio.totalValue,
+        holdDays,
+        newsContext:         "",
+      });
+
+      logger.warn(`SWING AUTO STOP-LOSS: ${h.symbol} sold @ ₹${h.currentPrice} (down ${pnlPct.toFixed(1)}%), P&L: ₹${pnl.toFixed(2)}`);
+    }
+  }
+
   // ── STEP 4: Call Claude with web_search for swing decision ──
   let decision;
   let webSearchUsed = false;

@@ -217,8 +217,9 @@ Valid values:
   marketSentiment: "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE"
 
 IMPORTANT:
-- Symbol in trades MUST come from the live top movers data provided above
-- If nothing qualifies, return trades as empty array []
+- For BUY: symbol MUST come from the live top movers data provided above
+- For SELL: you can and MUST sell any symbol currently in your holdings — even if it is NOT in today's top movers list
+- If nothing qualifies for a new BUY and no holdings need selling, return trades as empty array []
 - Your single web search result should directly inform your decision`;
 }
 
@@ -361,14 +362,22 @@ async function getSwingDecision(marketData, portfolio) {
         // Add the assistant's response (tool_use blocks) to history
         messages.push({ role: "assistant", content: response.content });
 
-        // Build tool_result blocks to acknowledge each tool call
+        // Build tool_result blocks — pass back actual search results from tool_result blocks
+        // The Anthropic SDK automatically handles web_search results inline in the response;
+        // we just need to forward the assistant turn as-is and let the model continue.
         const toolResults = response.content
           .filter((b) => b.type === "tool_use")
-          .map((b) => ({
-            type:        "tool_result",
-            tool_use_id: b.id,
-            content:     "Search executed — please incorporate results into your analysis.",
-          }));
+          .map((b) => {
+            // Extract actual result content if present alongside the tool_use block
+            const resultBlock = response.content.find(
+              (rb) => rb.type === "tool_result" && rb.tool_use_id === b.id
+            );
+            return {
+              type:        "tool_result",
+              tool_use_id: b.id,
+              content:     resultBlock?.content || "Web search completed. Use the search results already present in your context to inform your decision.",
+            };
+          });
 
         if (toolResults.length > 0) {
           messages.push({ role: "user", content: toolResults });
