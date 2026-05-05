@@ -874,9 +874,9 @@ exports.runDummyTradeTest = functions
 // FUNCTION 5: swingLoop — Scheduled every hour
 // ─────────────────────────────────────────────────────────────
 /**
- * Runs the swing trading cycle every hour during market hours.
+ * Runs the swing trading cycle every hour at :15 past the hour.
  * Claude uses web_search to browse Indian financial news.
- * Runs 09:00–15:00 IST, Monday–Friday (same window as NSE session).
+ * Runs at 09:15, 10:15, 11:15, 12:15, 13:15, 14:15, 15:15 IST, Mon–Fri.
  * The intraday market-hours guard ensures trades only execute 09:15–15:30.
  */
 exports.swingLoop = functions
@@ -885,7 +885,7 @@ exports.swingLoop = functions
     memory: "512MB",
   })
   .pubsub
-  .schedule("0 9-15 * * 1-5")
+  .schedule("15 9-15 * * 1-5")
   .timeZone("Asia/Kolkata")
   .onRun(async () => {
     try {
