@@ -47,7 +47,7 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-const { getMarketOverview, getTopMovers, getCurrentPrices } = require("./market_data");
+const { getMarketOverview, getTopMovers, getCurrentPrices, clearMarketCache } = require("./market_data");
 const { getTradeDecision }                                   = require("./claude_trader");
 const {
   getPortfolioState,
@@ -578,6 +578,10 @@ async function runSwingTradingCycle() {
   // A 20-second delay ensures swing hits NSE after intraday has already
   // warmed up the session, preventing simultaneous 403s at 9:15 AM.
   await new Promise((res) => setTimeout(res, 20000));
+
+  // Always fetch fresh market data for swing — never use intraday's cached prices.
+  // Swing runs only once per hour so it must see the latest NSE data.
+  clearMarketCache();
 
   // ── STEP 1: Read swing portfolio ────────────────────────────
   let portfolio;

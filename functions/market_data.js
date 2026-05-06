@@ -53,6 +53,22 @@ function isFresh(entry) {
   return entry.value !== null && Date.now() < entry.expiresAt;
 }
 
+/**
+ * Clears the market data cache (overview, movers, nifty500).
+ * Call this before a swing cycle fetch to guarantee live data,
+ * since swing runs only once per hour and must never use stale prices.
+ * Note: indicators and cookie caches are intentionally preserved.
+ */
+function clearMarketCache() {
+  CACHE.overview.value  = null;
+  CACHE.overview.expiresAt  = 0;
+  CACHE.movers.value    = null;
+  CACHE.movers.expiresAt    = 0;
+  CACHE.nifty500.value  = null;
+  CACHE.nifty500.expiresAt  = 0;
+  logger.info("Market data cache cleared — fresh fetch will follow.");
+}
+
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -362,4 +378,4 @@ async function getCurrentPrices(symbols) {
   }
 }
 
-module.exports = { getMarketOverview, getTopMovers, getCurrentPrices };
+module.exports = { getMarketOverview, getTopMovers, getCurrentPrices, clearMarketCache };
