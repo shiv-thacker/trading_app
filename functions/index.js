@@ -574,6 +574,11 @@ function canSwingBuy(trade, portfolio) {
 async function runSwingTradingCycle() {
   logger.info("=== ARJUN Swing Trading Cycle Started ===");
 
+  // Stagger swing vs intraday — both fire at :15 past the hour.
+  // A 20-second delay ensures swing hits NSE after intraday has already
+  // warmed up the session, preventing simultaneous 403s at 9:15 AM.
+  await new Promise((res) => setTimeout(res, 20000));
+
   // ── STEP 1: Read swing portfolio ────────────────────────────
   let portfolio;
   try {

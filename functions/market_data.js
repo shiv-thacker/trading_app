@@ -42,11 +42,11 @@ const nseClient = axios.create({ timeout: 15000, headers: NSE_HEADERS });
 // ─────────────────────────────────────────────────────────────
 
 const CACHE = {
-  overview:  { value: null, expiresAt: 0 },
-  movers:    { value: null, expiresAt: 0 },
-  // nifty500 data is shared between getTopMovers and getCurrentPrices
-  nifty500:  { value: null, expiresAt: 0 },
+  overview:   { value: null, expiresAt: 0 },
+  movers:     { value: null, expiresAt: 0 },
+  nifty500:   { value: null, expiresAt: 0 },
   indicators: { value: {}, expiresAt: 0 },
+  cookie:     { value: null, expiresAt: 0 },  // NSE session cookie
 };
 
 function isFresh(entry) {
@@ -79,20 +79,66 @@ function buildPivotLevels(high, low, close) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// NSE session cookie — required to avoid 403 at market open
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * NSE blocks API calls without a valid session cookie.
+ * We fetch the homepage first to get the cookie, then reuse it for 5 minutes.
+ * This is especially important at 9:15 AM when NSE is under heavy load.
+ */
+async function getNseCookie() {
+  if (isFresh(CACHE.cookie)) return CACHE.cookie.value;
+
+  logger.info("Fetching NSE session cookie from homepage...");
+  try {
+    const res = await axios.get("https://www.nseindia.com", {
+      timeout: 10000,
+      headers: NSE_HEADERS,
+    });
+
+    const rawCookies = res.headers["set-cookie"] || [];
+    const cookieStr  = rawCookies.map((c) => c.split(";")[0]).join("; ");
+
+    CACHE.cookie = { value: cookieStr, expiresAt: Date.now() + 5 * 60_000 };
+    logger.info("NSE session cookie obtained successfully.");
+    return cookieStr;
+  } catch (err) {
+    logger.warn("Could not fetch NSE cookie (will proceed without):", err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Core NSE fetch with retry
 // ─────────────────────────────────────────────────────────────
 
 async function nseGet(path) {
+  const cookie = await getNseCookie();
+  const headers = cookie
+    ? { ...NSE_HEADERS, Cookie: cookie }
+    : NSE_HEADERS;
+
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { data } = await nseClient.get(`https://www.nseindia.com${path}`);
+      const { data } = await nseClient.get(
+        `https://www.nseindia.com${path}`,
+        { headers }
+      );
       return data;
     } catch (err) {
       lastErr = err;
       const status = err?.response?.status;
+
+      // On 403, clear the cookie cache so next call gets a fresh one
+      if (status === 403) {
+        logger.warn(`NSE returned 403 on attempt ${attempt} — clearing cookie cache`);
+        CACHE.cookie = { value: null, expiresAt: 0 };
+      }
+
       if (status === 404 || status === 400) throw err;   // non-retryable
-      if (attempt < 3) await sleep(400 * attempt);
+      if (attempt < 3) await sleep(600 * attempt);       // slightly longer backoff
     }
   }
   throw lastErr;
