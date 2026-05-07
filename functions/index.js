@@ -574,10 +574,11 @@ function canSwingBuy(trade, portfolio) {
 async function runSwingTradingCycle() {
   logger.info("=== ARJUN Swing Trading Cycle Started ===");
 
-  // Stagger swing vs intraday — both fire at :15 past the hour.
-  // A 20-second delay ensures swing hits NSE after intraday has already
-  // warmed up the session, preventing simultaneous 403s at 9:15 AM.
-  await new Promise((res) => setTimeout(res, 20000));
+  // Swing fires at :17 past the hour; intraday fires every 5 min (:15, :20…).
+  // Intraday :15 completes in ~30–45s (done by ~:16), so swing at :17 already
+  // has a clean window. The extra 30s here pushes the NSE fetch to ~:17:30,
+  // a safe gap before the next intraday cycle fires at :20.
+  await new Promise((res) => setTimeout(res, 30000));
 
   // Always fetch fresh market data for swing — never use intraday's cached prices.
   // Swing runs only once per hour so it must see the latest NSE data.
@@ -883,9 +884,11 @@ exports.runDummyTradeTest = functions
 // FUNCTION 5: swingLoop — Scheduled every hour
 // ─────────────────────────────────────────────────────────────
 /**
- * Runs the swing trading cycle every hour at :15 past the hour.
+ * Runs the swing trading cycle every hour at :20 past the hour.
  * Claude uses web_search to browse Indian financial news.
- * Runs at 09:15, 10:15, 11:15, 12:15, 13:15, 14:15, 15:15 IST, Mon–Fri.
+ * Runs at 09:17, 10:17, 11:17, 12:17, 13:17, 14:17, 15:17 IST, Mon–Fri.
+ * Fires at :17 so NSE fetch lands at ~:17:30 — after intraday :15 completes
+ * (~:16) and well before intraday :20 starts, avoiding NSE 403 rate-limits.
  * The intraday market-hours guard ensures trades only execute 09:15–15:30.
  */
 exports.swingLoop = functions
@@ -894,7 +897,7 @@ exports.swingLoop = functions
     memory: "512MB",
   })
   .pubsub
-  .schedule("15 9-15 * * 1-5")
+  .schedule("17 9-15 * * 1-5")
   .timeZone("Asia/Kolkata")
   .onRun(async () => {
     try {
