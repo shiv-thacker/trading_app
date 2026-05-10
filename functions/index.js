@@ -405,22 +405,22 @@ async function runTradingCycle() {
  * Firebase Blaze plan required for Cloud Scheduler.
  * Timezone: Asia/Kolkata (IST)
  */
-exports.tradingLoop = functions
-  .runWith({
-    timeoutSeconds: 540,   // 9 minutes max (Cloud Function limit)
-    memory: "512MB",       // Needed for market data processing
-  })
-  .pubsub
-  .schedule("*/5 9-15 * * 1-5")
-  .timeZone("Asia/Kolkata")
-  .onRun(async () => {
-    try {
-      await runTradingCycle();
-    } catch (err) {
-      logger.error("Unhandled error in tradingLoop:", err);
-    }
-    return null;
-  });
+// exports.tradingLoop = functions
+//   .runWith({
+//     timeoutSeconds: 540,   // 9 minutes max (Cloud Function limit)
+//     memory: "512MB",       // Needed for market data processing
+//   })
+//   .pubsub
+//   .schedule("*/5 9-15 * * 1-5")
+//   .timeZone("Asia/Kolkata")
+//   .onRun(async () => {
+//     try {
+//       await runTradingCycle();
+//     } catch (err) {
+//       logger.error("Unhandled error in tradingLoop:", err);
+//     }
+//     return null;
+//   });
 
 // ─────────────────────────────────────────────────────────────
 // FUNCTION 2: manualTrigger — HTTPS Callable from Flutter
@@ -436,22 +436,22 @@ exports.tradingLoop = functions
  *
  * Returns the cycle result to the Flutter caller.
  */
-exports.manualTrigger = functions
-  .runWith({
-    timeoutSeconds: 540,
-    memory: "512MB",
-  })
-  .https
-  .onCall(async (data, context) => {
-    logger.info("Manual trigger called from Flutter app");
-    try {
-      const result = await runTradingCycle();
-      return { success: true, result };
-    } catch (err) {
-      logger.error("manualTrigger error:", err);
-      return { success: false, error: err.message };
-    }
-  });
+// exports.manualTrigger = functions
+//   .runWith({
+//     timeoutSeconds: 540,
+//     memory: "512MB",
+//   })
+//   .https
+//   .onCall(async (data, context) => {
+//     logger.info("Manual trigger called from Flutter app");
+//     try {
+//       const result = await runTradingCycle();
+//       return { success: true, result };
+//     } catch (err) {
+//       logger.error("manualTrigger error:", err);
+//       return { success: false, error: err.message };
+//     }
+//   });
 
 // ─────────────────────────────────────────────────────────────
 // FUNCTION 3: resetPortfolio — HTTPS Callable (Settings screen)
@@ -463,58 +463,58 @@ exports.manualTrigger = functions
  * Clears: trades collection, ai_logs collection, portfolio/snapshots,
  * then re-initializes portfolio/state to ₹10,000.
  */
-exports.resetPortfolio = functions
-  .runWith({ timeoutSeconds: 120 })
-  .https
-  .onCall(async (data, context) => {
-    logger.info("Portfolio reset requested");
+// exports.resetPortfolio = functions
+//   .runWith({ timeoutSeconds: 120 })
+//   .https
+//   .onCall(async (data, context) => {
+//     logger.info("Portfolio reset requested");
 
-    // Safety: only allow reset when market is closed
-    if (isMarketOpen()) {
-      return {
-        success: false,
-        error: "Cannot reset during market hours. Please try after 15:30 IST.",
-      };
-    }
+//     // Safety: only allow reset when market is closed
+//     if (isMarketOpen()) {
+//       return {
+//         success: false,
+//         error: "Cannot reset during market hours. Please try after 15:30 IST.",
+//       };
+//     }
 
-    try {
-      const db = admin.firestore();
-      const batch = db.batch();
+//     try {
+//       const db = admin.firestore();
+//       const batch = db.batch();
 
-      // Delete all trades
-      const trades = await db.collection("trades").get();
-      trades.docs.forEach((doc) => batch.delete(doc.ref));
+//       // Delete all trades
+//       const trades = await db.collection("trades").get();
+//       trades.docs.forEach((doc) => batch.delete(doc.ref));
 
-      // Delete all ai_logs
-      const logs = await db.collection("ai_logs").get();
-      logs.docs.forEach((doc) => batch.delete(doc.ref));
+//       // Delete all ai_logs
+//       const logs = await db.collection("ai_logs").get();
+//       logs.docs.forEach((doc) => batch.delete(doc.ref));
 
-      // Delete all snapshots
-      const snapshots = await db
-        .collection("portfolio")
-        .doc("state")
-        .collection("snapshots")
-        .get();
-      snapshots.docs.forEach((doc) => batch.delete(doc.ref));
+//       // Delete all snapshots
+//       const snapshots = await db
+//         .collection("portfolio")
+//         .doc("state")
+//         .collection("snapshots")
+//         .get();
+//       snapshots.docs.forEach((doc) => batch.delete(doc.ref));
 
-      await batch.commit();
+//       await batch.commit();
 
-      // Re-initialize portfolio
-      await db.collection("portfolio").doc("state").set({
-        cash:            10000,
-        totalValue:      10000,
-        startingCapital: 10000,
-        holdings:        [],
-        lastUpdated:     admin.firestore.FieldValue.serverTimestamp(),
-      });
+//       // Re-initialize portfolio
+//       await db.collection("portfolio").doc("state").set({
+//         cash:            10000,
+//         totalValue:      10000,
+//         startingCapital: 10000,
+//         holdings:        [],
+//         lastUpdated:     admin.firestore.FieldValue.serverTimestamp(),
+//       });
 
-      logger.info("Portfolio reset to ₹10,000");
-      return { success: true, message: "Portfolio reset to ₹10,000 successfully." };
-    } catch (err) {
-      logger.error("resetPortfolio failed:", err.message);
-      return { success: false, error: err.message };
-    }
-  });
+//       logger.info("Portfolio reset to ₹10,000");
+//       return { success: true, message: "Portfolio reset to ₹10,000 successfully." };
+//     } catch (err) {
+//       logger.error("resetPortfolio failed:", err.message);
+//       return { success: false, error: err.message };
+//     }
+//   });
 
 // ─────────────────────────────────────────────────────────────
 // Swing Trade Validation

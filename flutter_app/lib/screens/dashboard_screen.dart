@@ -33,6 +33,8 @@ import '../widgets/portfolio_chart.dart';
 // Riverpod stream providers — Intraday
 // ─────────────────────────────────────────────────────────────
 
+// Intraday providers kept for compilation — imported by portfolio_screen & ai_brain_screen.
+// Not watched in the dashboard itself (swing is now primary).
 final portfolioProvider = StreamProvider<Portfolio>((ref) {
   return ref.read(firestoreServiceProvider).portfolioStream();
 });
@@ -65,17 +67,14 @@ class DashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final portfolioAsync      = ref.watch(portfolioProvider);
-    final logsAsync           = ref.watch(aiLogsProvider);
-    final snapshotsAsync      = ref.watch(snapshotsProvider);
+    // final portfolioAsync  = ref.watch(portfolioProvider);  // intraday — not used in dashboard
+    // final logsAsync       = ref.watch(aiLogsProvider);     // intraday — not used in dashboard
+    // final snapshotsAsync  = ref.watch(snapshotsProvider);  // intraday — not used in dashboard
     final swingPortfolioAsync = ref.watch(swingPortfolioDashProvider);
     final swingLogsAsync      = ref.watch(swingAiLogsDashProvider);
 
-    final latestLog     = logsAsync.valueOrNull?.firstOrNull;
-    final latestSwingLog = swingLogsAsync.valueOrNull?.firstOrNull;
-    final portfolio     = portfolioAsync.valueOrNull ?? Portfolio.empty();
-    final swingPortfolio = swingPortfolioAsync.valueOrNull ?? Portfolio.empty();
-    final snapshots     = snapshotsAsync.valueOrNull ?? [];
+    final latestSwingLog  = swingLogsAsync.valueOrNull?.firstOrNull;
+    final swingPortfolio  = swingPortfolioAsync.valueOrNull ?? Portfolio.empty();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -83,9 +82,11 @@ class DashboardScreen extends ConsumerWidget {
         color: const Color(0xFF00FF88),
         backgroundColor: const Color(0xFF161B22),
         onRefresh: () async {
-          ref.invalidate(portfolioProvider);
-          ref.invalidate(aiLogsProvider);
-          ref.invalidate(snapshotsProvider);
+          // ref.invalidate(portfolioProvider);   // intraday — disabled
+          // ref.invalidate(aiLogsProvider);      // intraday — disabled
+          // ref.invalidate(snapshotsProvider);   // intraday — disabled
+          ref.invalidate(swingPortfolioDashProvider);
+          ref.invalidate(swingAiLogsDashProvider);
         },
         child: CustomScrollView(
           slivers: [
@@ -126,10 +127,10 @@ class DashboardScreen extends ConsumerWidget {
                 ],
               ),
               actions: [
-                if (latestLog != null)
+                if (latestSwingLog != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 16),
-                    child: _SentimentChip(sentiment: latestLog.marketSentiment),
+                    child: _SentimentChip(sentiment: latestSwingLog.marketSentiment),
                   ),
               ],
             ),
@@ -138,19 +139,19 @@ class DashboardScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Portfolio value headline ─────────────
-                  _PortfolioValueSection(portfolio: portfolio),
+                  // ── Swing portfolio value headline ────────
+                  _PortfolioValueSection(portfolio: swingPortfolio),
 
-                  // ── ARJUN status bar ─────────────────────
-                  MarketStatusBar(cycleStatus: latestLog?.cycleStatus),
+                  // ── Swing status bar ──────────────────────
+                  MarketStatusBar(cycleStatus: latestSwingLog?.cycleStatus),
 
-                  // ── Market index chips ────────────────────
-                  if (latestLog != null)
-                    _MarketSentimentBanner(log: latestLog),
+                  // ── Swing market sentiment ────────────────
+                  if (latestSwingLog != null)
+                    _MarketSentimentBanner(log: latestSwingLog),
 
                   const SizedBox(height: 20),
 
-                  // ── Holdings ─────────────────────────────
+                  // ── Swing holdings ────────────────────────
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
@@ -163,40 +164,37 @@ class DashboardScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  _HoldingsList(portfolio: portfolio),
+                  _HoldingsList(portfolio: swingPortfolio),
 
-                  const SizedBox(height: 24),
+                  // ── Intraday chart (disabled) ─────────────
+                  // const SizedBox(height: 24),
+                  // Padding(
+                  //   padding: const EdgeInsets.symmetric(horizontal: 16),
+                  //   child: Text(
+                  //     "TODAY'S PERFORMANCE",
+                  //     style: GoogleFonts.jetBrainsMono(
+                  //       color: Colors.grey.shade500,
+                  //       fontSize: 11,
+                  //       letterSpacing: 1.5,
+                  //     ),
+                  //   ),
+                  // ),
+                  // const SizedBox(height: 12),
+                  // Padding(
+                  //   padding: const EdgeInsets.symmetric(horizontal: 16),
+                  //   child: PortfolioChart(
+                  //     snapshots:       _todaySnapshots(snapshots),
+                  //     startingCapital: portfolio.startingCapital,
+                  //     isIntraday:      true,
+                  //     height:          180,
+                  //   ),
+                  // ),
 
-                  // ── Intraday chart ────────────────────────
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      "TODAY'S PERFORMANCE",
-                      style: GoogleFonts.jetBrainsMono(
-                        color: Colors.grey.shade500,
-                        fontSize: 11,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: PortfolioChart(
-                      snapshots:       _todaySnapshots(snapshots),
-                      startingCapital: portfolio.startingCapital,
-                      isIntraday:      true,
-                      height:          180,
-                    ),
-                  ),
-
-                  const SizedBox(height: 28),
-
-                  // ── Swing portfolio section ───────────────
-                  _SwingSection(
-                    portfolio: swingPortfolio,
-                    latestLog: latestSwingLog,
-                  ),
+                  // ── Swing secondary card (disabled — swing is now primary) ──
+                  // _SwingSection(
+                  //   portfolio: swingPortfolio,
+                  //   latestLog: latestSwingLog,
+                  // ),
 
                   const SizedBox(height: 32),
                 ],

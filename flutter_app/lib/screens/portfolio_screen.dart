@@ -51,7 +51,7 @@ class PortfolioScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 1, // intraday tab disabled
       child: Scaffold(
         backgroundColor: const Color(0xFF0D1117),
         appBar: AppBar(
@@ -90,7 +90,7 @@ class PortfolioScreen extends StatelessWidget {
                 ),
                 unselectedLabelStyle: GoogleFonts.jetBrainsMono(fontSize: 11),
                 tabs: const [
-                  Tab(text: '⚡  INTRADAY'),
+                  // Tab(text: '⚡  INTRADAY'), // intraday disabled
                   Tab(text: '📈  SWING'),
                 ],
               ),
@@ -99,7 +99,7 @@ class PortfolioScreen extends StatelessWidget {
         ),
         body: const TabBarView(
           children: [
-            _IntradayPortfolioTab(),
+            // _IntradayPortfolioTab(), // intraday disabled
             _SwingPortfolioTab(),
           ],
         ),
@@ -281,14 +281,16 @@ class _ModeBanner extends StatelessWidget {
         children: [
           Text(isSwing ? '📈' : '⚡', style: const TextStyle(fontSize: 14)),
           const SizedBox(width: 8),
-          Text(
-            isSwing
-                ? 'Swing portfolio — multi-day positions, web search powered'
-                : 'Intraday portfolio — same-day positions, 5-min cycles',
-            style: TextStyle(
-              color: Colors.grey.shade400,
-              fontSize: 11,
-              height: 1.3,
+          Expanded(
+            child: Text(
+              isSwing
+                  ? 'Swing portfolio — multi-day positions, web search powered'
+                  : 'Intraday portfolio — same-day positions, 5-min cycles',
+              style: TextStyle(
+                color: Colors.grey.shade400,
+                fontSize: 11,
+                height: 1.3,
+              ),
             ),
           ),
         ],

@@ -40,7 +40,7 @@ class AIBrainScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 1, // intraday tab disabled
       child: Scaffold(
         backgroundColor: const Color(0xFF0D1117),
         appBar: AppBar(
@@ -91,7 +91,7 @@ class AIBrainScreen extends StatelessWidget {
                 ),
                 unselectedLabelStyle: GoogleFonts.jetBrainsMono(fontSize: 11),
                 tabs: const [
-                  Tab(text: '⚡  INTRADAY'),
+                  // Tab(text: '⚡  INTRADAY'), // intraday disabled
                   Tab(text: '📈  SWING'),
                 ],
               ),
@@ -100,7 +100,7 @@ class AIBrainScreen extends StatelessWidget {
         ),
         body: const TabBarView(
           children: [
-            _IntradayLogsFeed(),
+            // _IntradayLogsFeed(), // intraday disabled
             _SwingLogsFeed(),
           ],
         ),

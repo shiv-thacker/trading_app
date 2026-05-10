@@ -1,18 +1,16 @@
 /// screens/history_screen.dart
 /// =============================
-/// Trade history screen — shows all trades ARJUN has executed.
+/// Trade history screen — shows all swing trades ARJUN has executed.
 ///
 /// FEATURES:
-///   - Mode toggle: INTRADAY | SWING (top)
-///   - Filter tabs: ALL | BUY | SELL (per mode)
+///   - Filter tabs: ALL | BUY | SELL
 ///   - Real-time updates via Firestore stream
 ///   - Each trade shows: symbol, company, timestamp, price × qty,
 ///     P&L (for SELL), AI reason, trade type badge, confidence badge
 ///   - Summary bar: trade count, realized P&L, win rate
 ///
 /// DATA:
-///   Intraday: tradesStream()      — from `trades` collection
-///   Swing:    swingTradesStream() — from `swing_trades` collection
+///   Swing: swingTradesStream() — from `swing_trades` collection
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,16 +24,11 @@ import '../widgets/trade_card.dart';
 // Providers
 // ─────────────────────────────────────────────────────────────
 
-/// true = intraday, false = swing
-final _modeProvider   = StateProvider<bool>((ref) => true);
 final _filterProvider = StateProvider<String?>((ref) => null);
 
-final _tradesProvider = StreamProvider.family<List<Trade>, ({bool isIntraday, String? filter})>(
-  (ref, args) {
-    final svc = ref.read(firestoreServiceProvider);
-    return args.isIntraday
-        ? svc.tradesStream(filter: args.filter)
-        : svc.swingTradesStream(filter: args.filter);
+final _tradesProvider = StreamProvider.family<List<Trade>, String?>(
+  (ref, filter) {
+    return ref.read(firestoreServiceProvider).swingTradesStream(filter: filter);
   },
 );
 
@@ -47,9 +40,8 @@ class HistoryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isIntraday  = ref.watch(_modeProvider);
     final filter      = ref.watch(_filterProvider);
-    final tradesAsync = ref.watch(_tradesProvider((isIntraday: isIntraday, filter: filter)));
+    final tradesAsync = ref.watch(_tradesProvider(filter));
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -64,30 +56,16 @@ class HistoryScreen extends ConsumerWidget {
           ),
         ),
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(96),
-          child: Column(
-            children: [
-              // ── Mode toggle: INTRADAY | SWING ────────────
-              _ModeToggle(
-                isIntraday: isIntraday,
-                onChanged: (val) {
-                  ref.read(_modeProvider.notifier).state = val;
-                  ref.read(_filterProvider.notifier).state = null;
-                },
-              ),
-              const SizedBox(height: 6),
-              // ── BUY / SELL filter tabs ───────────────────
-              _FilterTabs(
-                current: filter,
-                onChanged: (f) => ref.read(_filterProvider.notifier).state = f,
-              ),
-            ],
+          preferredSize: const Size.fromHeight(48),
+          child: _FilterTabs(
+            current: filter,
+            onChanged: (f) => ref.read(_filterProvider.notifier).state = f,
           ),
         ),
       ),
       body: tradesAsync.when(
         loading: () => const Center(
-          child: CircularProgressIndicator(color: Color(0xFF00FF88)),
+          child: CircularProgressIndicator(color: Color(0xFF7C4DFF)),
         ),
         error: (e, _) => Center(
           child: Text(
@@ -97,12 +75,12 @@ class HistoryScreen extends ConsumerWidget {
         ),
         data: (trades) {
           if (trades.isEmpty) {
-            return _EmptyState(filter: filter, isIntraday: isIntraday);
+            return _EmptyState(filter: filter);
           }
 
           return Column(
             children: [
-              _SummaryBar(trades: trades, isSwing: !isIntraday),
+              _SummaryBar(trades: trades),
               Expanded(
                 child: ListView.builder(
                   padding: const EdgeInsets.only(top: 8, bottom: 24),
@@ -113,88 +91,6 @@ class HistoryScreen extends ConsumerWidget {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Mode toggle (INTRADAY / SWING)
-// ─────────────────────────────────────────────────────────────
-class _ModeToggle extends StatelessWidget {
-  final bool isIntraday;
-  final ValueChanged<bool> onChanged;
-
-  const _ModeToggle({required this.isIntraday, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 36,
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-      decoration: BoxDecoration(
-        color: const Color(0xFF161B22),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          _ModeTab(
-            label: '⚡  INTRADAY',
-            isSelected: isIntraday,
-            color: const Color(0xFF00FF88),
-            onTap: () => onChanged(true),
-          ),
-          _ModeTab(
-            label: '📈  SWING',
-            isSelected: !isIntraday,
-            color: const Color(0xFF7C4DFF),
-            onTap: () => onChanged(false),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModeTab extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _ModeTab({
-    required this.label,
-    required this.isSelected,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: isSelected ? color.withOpacity(0.12) : null,
-            borderRadius: BorderRadius.circular(6),
-            border: isSelected
-                ? Border.all(color: color.withOpacity(0.4))
-                : null,
-          ),
-          child: Center(
-            child: Text(
-              label,
-              style: GoogleFonts.jetBrainsMono(
-                color: isSelected ? color : Colors.grey.shade500,
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -264,9 +160,8 @@ class _FilterTabs extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _SummaryBar extends StatelessWidget {
   final List<Trade> trades;
-  final bool isSwing;
 
-  const _SummaryBar({required this.trades, required this.isSwing});
+  const _SummaryBar({required this.trades});
 
   @override
   Widget build(BuildContext context) {
@@ -300,14 +195,12 @@ class _SummaryBar extends StatelessWidget {
             value: total > 0 ? '${winRate.toStringAsFixed(0)}%' : '--',
             valueColor: winRate > 50 ? const Color(0xFF00C853) : const Color(0xFFFF3B30),
           ),
-          if (isSwing) ...[
-            _Divider(),
-            _Stat(
-              label: 'MODE',
-              value: 'SWING',
-              valueColor: const Color(0xFF7C4DFF),
-            ),
-          ],
+          _Divider(),
+          _Stat(
+            label: 'MODE',
+            value: 'SWING',
+            valueColor: const Color(0xFF7C4DFF),
+          ),
         ],
       ),
     );
@@ -359,25 +252,20 @@ class _Divider extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
   final String? filter;
-  final bool isIntraday;
-  const _EmptyState({this.filter, required this.isIntraday});
+  const _EmptyState({this.filter});
 
   @override
   Widget build(BuildContext context) {
-    final modeLabel = isIntraday ? 'intraday' : 'swing';
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            isIntraday ? '📊' : '📈',
-            style: const TextStyle(fontSize: 48),
-          ),
+          const Text('📈', style: TextStyle(fontSize: 48)),
           const SizedBox(height: 16),
           Text(
             filter == null
-                ? 'No $modeLabel trades yet'
-                : 'No ${filter!.toLowerCase()} $modeLabel trades yet',
+                ? 'No swing trades yet'
+                : 'No ${filter!.toLowerCase()} swing trades yet',
             style: const TextStyle(
               color: Colors.white70,
               fontSize: 16,
@@ -386,9 +274,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            isIntraday
-                ? 'ARJUN will execute intraday trades when opportunities arise'
-                : 'ARJUN swing engine will trade when catalysts are found via web search',
+            'ARJUN swing engine will trade when catalysts are found via web search',
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
             textAlign: TextAlign.center,
           ),

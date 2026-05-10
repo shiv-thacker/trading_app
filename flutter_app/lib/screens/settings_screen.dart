@@ -225,45 +225,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── ARJUN Control ──────────────────────────────────
-          _SectionHeader(label: 'ARJUN CONTROL'),
-          const SizedBox(height: 8),
+          // ── ARJUN Control (intraday — disabled) ────────────
+          // _SectionHeader(label: 'ARJUN CONTROL'),
+          // const SizedBox(height: 8),
 
-          _SettingsCard(
-            children: [
-              _ActionTile(
-                icon: Icons.play_circle_outline_rounded,
-                iconColor: const Color(0xFF00FF88),
-                title: 'Run one trading cycle now',
-                subtitle: 'Manually trigger ARJUN — useful for testing',
-                loading: _isTriggering,
-                onTap: _runManualCycle,
-              ),
-              Divider(color: Colors.white.withOpacity(0.06)),
-              _ActionTile(
-                icon: Icons.bug_report_rounded,
-                iconColor: const Color(0xFF4FC3F7),
-                title: 'Run dummy buy/sell test',
-                subtitle: 'Executes synthetic trade even if market is closed',
-                subtitle2: 'No portfolio cash/holdings change',
-                loading: _isDummyTrading,
-                onTap: _runDummyTradeTest,
-              ),
-              Divider(color: Colors.white.withOpacity(0.06)),
-              _ActionTile(
-                icon: Icons.restart_alt_rounded,
-                iconColor: const Color(0xFFFF3B30),
-                title: 'Reset portfolio',
-                subtitle: 'Reset to ₹10,000 and clear all history',
-                subtitle2: 'Only available when market is closed',
-                loading: _isResetting,
-                onTap: _resetPortfolio,
-                destructive: true,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 24),
+          // _SettingsCard(
+          //   children: [
+          //     _ActionTile(
+          //       icon: Icons.play_circle_outline_rounded,
+          //       iconColor: const Color(0xFF00FF88),
+          //       title: 'Run one trading cycle now',
+          //       subtitle: 'Manually trigger ARJUN — useful for testing',
+          //       loading: _isTriggering,
+          //       onTap: _runManualCycle,
+          //     ),
+          //     Divider(color: Colors.white.withOpacity(0.06)),
+          //     _ActionTile(
+          //       icon: Icons.bug_report_rounded,
+          //       iconColor: const Color(0xFF4FC3F7),
+          //       title: 'Run dummy buy/sell test',
+          //       subtitle: 'Executes synthetic trade even if market is closed',
+          //       subtitle2: 'No portfolio cash/holdings change',
+          //       loading: _isDummyTrading,
+          //       onTap: _runDummyTradeTest,
+          //     ),
+          //     Divider(color: Colors.white.withOpacity(0.06)),
+          //     _ActionTile(
+          //       icon: Icons.restart_alt_rounded,
+          //       iconColor: const Color(0xFFFF3B30),
+          //       title: 'Reset portfolio',
+          //       subtitle: 'Reset to ₹10,000 and clear all history',
+          //       subtitle2: 'Only available when market is closed',
+          //       loading: _isResetting,
+          //       onTap: _resetPortfolio,
+          //       destructive: true,
+          //     ),
+          //   ],
+          // ),
 
           // ── Swing Trading Control ──────────────────────────
           _SectionHeader(label: 'SWING TRADING CONTROL'),
@@ -313,12 +311,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 label: 'Data Source',
                 value: 'NSE via yfinance (Nifty 500)',
               ),
-              Divider(color: Colors.white.withOpacity(0.06)),
-              _InfoTile(
-                icon: Icons.schedule_rounded,
-                label: 'Intraday Cycle',
-                value: 'Every 5 min, 09:15–15:30 IST',
-              ),
+              // Divider(color: Colors.white.withOpacity(0.06)),
+              // _InfoTile(
+              //   icon: Icons.schedule_rounded,
+              //   label: 'Intraday Cycle',
+              //   value: 'Every 5 min, 09:15–15:30 IST',
+              // ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.access_time_rounded,
@@ -328,8 +326,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.account_balance_wallet_rounded,
-                label: 'Capital (each)',
-                value: '₹10,000 intraday + ₹10,000 swing',
+                label: 'Capital',
+                value: '₹10,000 swing',
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
