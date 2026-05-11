@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:292484877265:android:8c4dc7afb7a9e05acceef0",
+        "mobilesdk_app_id": "1:292484877265:android:416737902e18ce5ccceef0",
         "android_client_info": {
-          "package_name": "com.example.ai_trader"
+          "package_name": "com.shivang.ai_trader"
         }
       },
       "oauth_client": [],

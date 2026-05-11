@@ -13,7 +13,7 @@
 ///
 /// FIRST LAUNCH:
 ///   On first app open, a disclaimer modal is shown BEFORE the dashboard:
-///   "Virtual simulator only. No real money. Not SEBI advice."
+///   Short welcome note: simulated sandbox, not a broker.
 ///   User must tap "I Understand" to proceed.
 ///   Stored in SharedPreferences so it only appears once.
 ///
@@ -24,6 +24,7 @@
 ///   Font:        JetBrains Mono (from google_fonts)
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -75,9 +76,10 @@ class AITraderApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AI Trader — ARJUN',
+      title: 'ARJUN',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
+      scrollBehavior: const _AppScrollBehavior(),
       home: const _DisclaimerGate(),
     );
   }
@@ -90,16 +92,19 @@ class AITraderApp extends StatelessWidget {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      visualDensity: VisualDensity.standard,
       scaffoldBackgroundColor: bg,
       colorScheme: const ColorScheme.dark(
         primary:    accent,
         secondary:  accent,
         surface:    surface,
-        background: bg,
         onPrimary:  Colors.black,
         onSurface:  Colors.white,
       ),
-      textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
+      textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme).apply(
+        bodyColor: const Color(0xFFE6EDF3),
+        displayColor: Colors.white,
+      ),
       appBarTheme: const AppBarTheme(
         backgroundColor:    bg,
         foregroundColor:    Colors.white,
@@ -115,6 +120,8 @@ class AITraderApp extends StatelessWidget {
         unselectedItemColor:  Color(0xFF6B7280),
         elevation:            0,
         type:                 BottomNavigationBarType.fixed,
+        selectedLabelStyle:   TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        unselectedLabelStyle: TextStyle(fontSize: 11),
       ),
       cardTheme: const CardThemeData(
         color:  surface,
@@ -131,6 +138,23 @@ class AITraderApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Softer scrolling on lists and overscroll (easier on the eyes than harsh clamps).
+class _AppScrollBehavior extends MaterialScrollBehavior {
+  const _AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.trackpad,
+      };
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -202,79 +226,83 @@ class _DisclaimerOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: Colors.black.withOpacity(0.85),
-      child: Center(
-        child: Container(
-          margin: const EdgeInsets.all(24),
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(
-            color: const Color(0xFF161B22),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: const Color(0xFFFFA726).withOpacity(0.4),
-              width: 1.5,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('⚠️', style: TextStyle(fontSize: 48)),
-              const SizedBox(height: 16),
-              Text(
-                'IMPORTANT DISCLAIMER',
-                style: GoogleFonts.jetBrainsMono(
-                  color: const Color(0xFFFFA726),
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 400),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161B22),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.12),
+                  width: 1,
                 ),
               ),
-              const SizedBox(height: 20),
-              Text(
-                'AI Trader is a VIRTUAL SIMULATOR only.',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                '• No real money is involved\n'
-                '• All ₹10,000 is virtual currency\n'
-                '• This is NOT investment advice\n'
-                '• NOT regulated or approved by SEBI\n'
-                '• For educational / research use only\n'
-                '• Past simulated results ≠ future returns',
-                style: TextStyle(
-                  color: Colors.grey.shade400,
-                  fontSize: 13,
-                  height: 1.7,
-                ),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00FF88),
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  onPressed: onAccept,
-                  child: Text(
-                    'I UNDERSTAND — ENTER APP',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('📚', style: TextStyle(fontSize: 40)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Welcome to ARJUN',
                     style: GoogleFonts.jetBrainsMono(
+                      color: const Color(0xFF00FF88),
+                      fontSize: 15,
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      letterSpacing: 0.5,
                     ),
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This is a small lab for exploring how AI can read markets and '
+                    'paper-trade Indian stocks — think of it as a sandbox, not a broker.',
+                    style: TextStyle(
+                      color: Colors.grey.shade300,
+                      fontSize: 14,
+                      height: 1.55,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Balances and trades here are simulated. For real money, use your '
+                    'own research and a licensed platform you trust.',
+                    style: TextStyle(
+                      color: Colors.grey.shade500,
+                      fontSize: 13,
+                      height: 1.55,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 22),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00FF88),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        minimumSize: const Size(0, 52),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: onAccept,
+                      child: Text(
+                        'Continue',
+                        style: GoogleFonts.jetBrainsMono(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -311,15 +339,16 @@ class _MainShellState extends State<_MainShell> {
         children: _screens,
       ),
       floatingActionButton: _currentIndex == 0
-          ? FloatingActionButton.small(
+          ? FloatingActionButton(
               backgroundColor: const Color(0xFF1D6FEB),
+              elevation: 4,
               onPressed: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const SettingsScreen()),
                 );
               },
-              child: const Icon(Icons.settings_rounded, size: 18, color: Colors.white),
+              child: const Icon(Icons.settings_rounded, color: Colors.white),
             )
           : null,
       bottomNavigationBar: Container(
@@ -328,9 +357,12 @@ class _MainShellState extends State<_MainShell> {
             top: BorderSide(color: Colors.white.withOpacity(0.08)),
           ),
         ),
-        child: BottomNavigationBar(
+        child: SafeArea(
+          top: false,
+          child: BottomNavigationBar(
           currentIndex: _currentIndex,
           onTap: (i) => setState(() => _currentIndex = i),
+          iconSize: 26,
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.dashboard_rounded),
@@ -353,6 +385,7 @@ class _MainShellState extends State<_MainShell> {
               label: 'AI Brain',
             ),
           ],
+        ),
         ),
       ),
     );
