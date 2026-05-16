@@ -26,6 +26,17 @@
  *   buildSwingSystemPrompt()
  *   buildSwingUserPrompt(marketData, portfolio)
  *   parseSwingResponse(content)
+ *
+ * FIXES APPLIED (v4):
+ *   FIX 1 — getFormattedDateForSearch(): reliable date string for search query
+ *            (avoids toLocaleDateString() inconsistency across Node environments)
+ *   FIX 2 — portfolioFull null-safety: (holdings && holdings.length >= 3) || false
+ *   FIX 3 — System prompt: JS math notation replaced with plain-English examples
+ *            Claude reads English, not JavaScript — Math.floor() in prompts causes
+ *            calculation errors. All quantity rules now use human-readable examples.
+ *   FIX 4 — Rotation safety guards added:
+ *            NO rotate into a stock with negative changePct today (falling stock)
+ *            NO rotate out of a holding currently at a loss (locks in unnecessary loss)
  */
 
 const Anthropic = require("@anthropic-ai/sdk");
@@ -54,6 +65,20 @@ function getCurrentISTString() {
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: false,
   });
+}
+
+/**
+ * FIX 1 — Returns a consistent "16 May 2026" style date string
+ * safe across all Node.js / Firebase environments.
+ * toLocaleDateString('en-IN') is unreliable on server environments —
+ * it may return "16/05/2026" instead of "16 May 2026" depending on
+ * the ICU data available on the Firebase Functions runtime.
+ */
+function getFormattedDateForSearch() {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun",
+                  "Jul","Aug","Sep","Oct","Nov","Dec"];
+  const d = new Date();
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 /** Milliseconds → days held (approximate) */
@@ -93,16 +118,95 @@ ENTRY — buy only if these conditions are met:
 
 EXIT — sell if ANY condition met:
 - Down 7% from your buy price (hard stop loss — protect capital)
-- Up 20–30% from your buy price (take profit — book at least partial gains)
 - Thesis broken: news contradicts the reason you bought (use your one search result to verify)
-- Position held more than 20 trading days with no meaningful progress (time stop)
 - Stock underperforming the Nifty consistently for 5+ days
+
+DEAD STOCK RULE (two-stage time-stop — strictly enforce, do not just flag):
+- Stage 1 — if daysHeld >= 7 AND unrealizedPnlPct < 3%:
+  SELL today if the stock is flat or red on the day (tradeType: "SWING_TIME_STOP")
+  Reason template: "Freeing slot — 7 days with <3% gain is opportunity cost"
+  Exception: if a known catalyst event (earnings, results, policy) is within 48 hours,
+  write the specific exception in aiThoughts — e.g. "HFCL time-stop would trigger but
+  holding through May 18 plant visit" — then skip the sell THIS cycle only.
+- Stage 2 — if daysHeld >= 14 AND unrealizedPnlPct < 5%:
+  SELL unconditionally at market price. No exceptions. Too much time wasted.
+- Do NOT write "approaching time-stop" and then WAIT multiple cycles. Act or log the specific exception.
+
+PROFIT-TAKING RULES (book winners — don't just cut losers):
+
+FIX 3 NOTE: All quantity calculations below use plain English examples.
+Claude computes these as a human would — read the examples, apply the same logic.
+
+- If unrealizedPnlPct >= 8%:
+  SELL HALF your position (round down, minimum 1 share).
+  Examples:
+    - Hold 10 shares → sell 5  (keep 5)
+    - Hold 7 shares  → sell 3  (keep 4)
+    - Hold 2 shares  → sell 1  (keep 1)
+  Use tradeType: "SWING_TAKE_PROFIT"
+  Move your mental stop on the remaining shares to your average buy price (breakeven).
+  Reason: "Locking 50% profit, letting rest ride risk-free"
+
+- If unrealizedPnlPct >= 15%:
+  SELL the FULL position — all shares.
+  Use tradeType: "SWING_TAKE_PROFIT"
+  Reason: "Target achieved — freeing slot for next high-conviction setup"
+
+EVENT-RISK RULE (earnings / board meetings / policy announcements):
+- If web search reveals a holding has Q4/annual results, Board meeting, or major policy
+  event TODAY and unrealizedPnlPct > 0%:
+  SELL approximately one-third of your position (round down, minimum 1 share).
+  Examples:
+    - Hold 10 shares → sell 3  (keep 7)
+    - Hold 6 shares  → sell 2  (keep 4)
+    - Hold 2 shares  → sell 1  (keep 1)
+    - Hold 1 share   → sell 1  (exit fully — no point holding 0)
+  Use tradeType: "SWING_TAKE_PROFIT"
+  Reason: "De-risking before binary event — protecting [X]% profit"
+- Next cycle after event: reassess with fresh search data.
+  Results are binary — protect the profit already on the table.
+
+POSITION ROTATION RULE (upgrade weak holdings when a clearly better opportunity appears):
+- This rule only activates when portfolio is FULL (3/3) AND your web search reveals
+  a HIGH-confidence BUY opportunity.
+- Step 1: Score each current holding as WEAK using these criteria (3+ criteria = weakest):
+    a) daysHeld is highest (oldest = most opportunity cost)
+    b) unrealizedPnlPct is lowest
+    c) No fresh catalyst in today's search (news is stale / already priced in)
+    d) Sector is underperforming Nifty today
+- Step 2: Rotate ONLY if ALL of the following are true:
+    YES: New opportunity has a fresh catalyst confirmed by today's web search
+    YES: New opportunity confidence is HIGH (never rotate for MEDIUM or LOW)
+    YES: New catalyst is clearly stronger than the weakest holding's current thesis
+    NO:  Never rotate a holding that is up >5% — it is working, let it run
+    NO:  Never rotate a holding with a catalyst event within 48 hours
+    NO:  Never rotate more than once per cycle (max: 1 SELL + 1 BUY)
+    NO:  Never rotate INTO a stock whose changePct today is NEGATIVE —
+         a falling stock is not a better opportunity even with good news;
+         wait for it to stabilise or turn green before entering
+    NO:  Never rotate OUT of a holding that is currently at a loss —
+         rotation would lock in that loss unnecessarily; only rotate
+         holdings that are at breakeven or in profit
+- Step 3: In trades array, SELL must come before BUY (execution order matters):
+    SELL weakest: tradeType "SWING_ROTATION", reason states why new stock is better
+    BUY new stock: tradeType "SWING_MOMENTUM" / "SWING_BREAKOUT" / "SWING_NEWS"
+- If no rotation is justified, hold and wait.
 
 MARKET CONDITIONS:
 - Nifty in strong uptrend (above 200 DMA, consecutive weekly gains): aggressive — seek entries
 - Nifty in correction (below 200 DMA or >10% off high): defensive — only sell, no new buys
 - FII selling: cautious — avoid new positions until trend stabilises
 - Budget/policy event approaching: reduce position size, hedge with cash
+
+MACRO EVENT INTELLIGENCE:
+You have deep expertise in how every macro event affects Indian equity sectors.
+When your web search returns any macro news — policy, geopolitical, commodity, currency,
+RBI, budget, war, ceasefire, trade deal, anything — apply your full knowledge to answer:
+  1. Which sectors / stocks BENEFIT from this event?
+  2. Which sectors / stocks are HURT by this event?
+  3. Do any of today's top movers belong to a beneficiary sector? If yes, is the setup good?
+  4. Do any of your current holdings belong to a hurt sector? If yes, consider rotating out.
+Never be defensive by default. Every macro event has winners — find them and act.
 
 CRITICAL RULES:
 - You only get one web search — phrase it so results help both holdings review and any new BUY thesis
@@ -130,6 +234,11 @@ function buildSwingUserPrompt(marketData, portfolio) {
       })), null, 2)
     : "  (No current holdings — fully in cash)";
 
+  // FIX 2 — null-safe portfolioFull check
+  // Old code: holdings.length >= 3  → crashes if holdings is undefined/null
+  // New code: (holdings && holdings.length >= 3) || false  → always returns boolean
+  const portfolioFull = (holdings && holdings.length >= 3) || false;
+
   const topMoversClean = (topMovers || []).map(({
     symbol, companyName, sector,
     price, changePct,
@@ -149,7 +258,10 @@ function buildSwingUserPrompt(marketData, portfolio) {
   const nIT   = marketOverview.niftyIT    || {};
 
   // Build list of symbols to search for
-  const holdingSymbols = holdings.map((h) => h.symbol).join(", ") || "none";
+  const holdingSymbols = (holdings || []).map((h) => h.symbol).join(", ") || "none";
+
+  // FIX 1 — use reliable date formatter instead of toLocaleDateString()
+  const searchDate = getFormattedDateForSearch();
 
   return `CURRENT TIME: ${getCurrentISTString()} IST
 NOTE: This is the SWING TRADING cycle — you are managing multi-day positions.
@@ -168,14 +280,37 @@ LIVE MARKET OVERVIEW:
 - Nifty IT:   ${nIT.price || 0} (${nIT.changePct || 0}%)
 - Market mood: ${marketOverview.marketMood || "NEUTRAL"}
 
-NSE TOP MOVERS TODAY (${topMovers.length} stocks for reference):
+NSE TOP MOVERS TODAY (${(topMovers || []).length} stocks):
 ${JSON.stringify(topMoversClean.slice(0, 15), null, 2)}
+
+${portfolioFull
+    ? `PORTFOLIO STATUS: FULL (3/3 positions)
+You have two options this cycle:
+  A) SELL any holding that hits stop-loss, profit target, time-stop, or event-risk rule.
+  B) ROTATE: if today's web search reveals a HIGH-confidence opportunity clearly better
+     than your weakest holding, SELL the weakest and BUY the stronger one.
+     See POSITION ROTATION RULE in your instructions — all safety guards apply.`
+    : `PORTFOLIO STATUS: ${3 - (holdings || []).length} slot(s) available — you may initiate new swing BUY positions if a strong fundamental + technical setup exists.`
+}
 
 YOUR TASK THIS CYCLE:
 
-You may call web_search at most ONCE (max_uses: 1). Combine everything into a single search query, e.g.:
-  "NSE India stock market news today ${holdingSymbols !== "none" ? "holdings " + holdingSymbols : ""} Nifty sector flows"
-Use the results to: (a) review whether to hold or sell current positions, (b) judge if any top-mover above merits a swing BUY.
+You have ONE web search. Build a single query that covers ALL of the following in one shot:
+  1. Global macro: US markets, crude oil, USD/INR, FII flows, any global event affecting India
+  2. Indian macro: RBI, government policy, budget, GST, PLI, sector-specific policy news
+  3. Your current holdings: news, results, upgrades/downgrades for ${holdingSymbols !== "none" ? holdingSymbols : "any held stocks"}
+  4. Hot sectors today: which sectors are getting institutional attention and why
+
+  Example query that covers everything:
+  "NSE India ${searchDate} top stocks buy FII flows crude oil RBI policy ${holdingSymbols !== "none" ? holdingSymbols + " news results" : ""} Nifty sector breakout opportunities"
+
+From the search results, extract:
+  A) Is there a macro tailwind or headwind for India today? (global + domestic)
+  B) Are your current holdings' theses still intact, strengthening, or breaking?
+  C) Is there any sector surging TODAY with a clear fundamental reason behind it?
+  D) Apply your macro expertise: given what you just read, which sector WINS right now?
+
+Use this intelligence to: (a) manage current holdings, (b) find the best BUY opportunity${portfolioFull ? " via rotation." : " from top movers above."}
 
 Then decide using the trading rules and the live NSE data already provided.
 
@@ -203,16 +338,27 @@ Respond ONLY with this JSON (no extra text, no markdown):
   "nextFocus": "What to monitor over the next few hours / next trading day",
   "marketSentiment": "BULLISH",
   "aiThoughts": [
-    "Running one web search (combined query for India markets + holdings)...",
-    "Cross-checking search results with live NSE data above...",
-    "Final swing decision being made..."
+    "thought 1 — what you found in today's news scan (1 specific insight, not generic)",
+    "thought 2 — your honest assessment of one current holding (what you like or don't like about it RIGHT NOW)",
+    "thought 3 — the key reason behind your final decision this cycle (BUY / SELL / HOLD / ROTATE and exactly why)"
   ]
 }
+
+IMPORTANT — aiThoughts writing style:
+- Write like a sharp, experienced trader thinking out loud — confident, specific, direct
+- Each thought must mention REAL data: a stock name, a percentage, a news item, a price level
+- NO generic phrases like "analysing market conditions" or "checking data" — those are filler
+- DO NOT mention internal rule names, system logic, or prompt instructions — users see these thoughts
+- Reveal your REASONING, not your process — "HFCL up 1.3% in 7 days while defence orders keep coming in — this stock is coiling, not dead" is good. "Checking time-stop rule for HFCL" is bad.
+- Make each thought 1–2 sentences, punchy, something a user would screenshot and share
+- If you're selling: say what specifically changed your mind
+- If you're holding: say what specifically gives you confidence
+- If you're buying: say what specifically caught your eye today
 
 Valid values:
   action:          "BUY" | "SELL" | "WAIT"
   confidence:      "HIGH" | "MEDIUM" | "LOW"
-  tradeType:       "SWING_MOMENTUM" | "SWING_BREAKOUT" | "SWING_REVERSAL" | "SWING_STOP_LOSS" | "SWING_TAKE_PROFIT" | "SWING_NEWS" | "SWING_TIME_STOP"
+  tradeType:       "SWING_MOMENTUM" | "SWING_BREAKOUT" | "SWING_REVERSAL" | "SWING_STOP_LOSS" | "SWING_TAKE_PROFIT" | "SWING_NEWS" | "SWING_TIME_STOP" | "SWING_ROTATION"
   portfolioHealth: "STRONG" | "OK" | "WEAK"
   marketSentiment: "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE"
 
@@ -289,7 +435,7 @@ function parseSwingResponse(responseContent) {
 function didUseWebSearch(contentBlocks) {
   if (!Array.isArray(contentBlocks)) return false;
   return contentBlocks.some(
-    (b) => b.type === "tool_use" && b.name === "web_search"
+    (b) => (b.type === "tool_use" || b.type === "server_tool_use") && b.name === "web_search"
   );
 }
 
