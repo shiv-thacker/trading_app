@@ -40,6 +40,9 @@ dependencies:
   # First launch / settings persistence
   shared_preferences: ^2.3.2
 
+  # NSE market data (fetched on-device — NSE blocks Firebase/GCP IPs)
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
