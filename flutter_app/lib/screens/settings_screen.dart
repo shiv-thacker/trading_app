@@ -263,36 +263,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           //   ],
           // ),
 
-          // ── Swing Trading Control ──────────────────────────
-          _SectionHeader(label: 'SWING TRADING CONTROL'),
-          const SizedBox(height: 8),
-
-          _SettingsCard(
-            children: [
-              _ActionTile(
-                icon: Icons.travel_explore_rounded,
-                iconColor: const Color(0xFF7C4DFF),
-                title: 'Run one swing cycle now',
-                subtitle: 'Manually trigger swing AI — uses web search',
-                subtitle2: 'Browses Indian financial news live via Claude',
-                loading: _isSwingTriggering,
-                onTap: _runSwingCycle,
-              ),
-              Divider(color: Colors.white.withOpacity(0.06)),
-              _ActionTile(
-                icon: Icons.restart_alt_rounded,
-                iconColor: const Color(0xFF7C4DFF).withOpacity(0.8),
-                title: 'Reset swing portfolio',
-                subtitle: 'Reset swing to ₹10,000 and clear swing history',
-                subtitle2: 'Only available when market is closed',
-                loading: _isSwingResetting,
-                onTap: _resetSwingPortfolio,
-                destructive: false,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 24),
+          // ── Swing Trading Control (hidden for production) ───
+          // _SectionHeader(label: 'SWING TRADING CONTROL'),
+          // const SizedBox(height: 8),
+          //
+          // _SettingsCard(
+          //   children: [
+          //     _ActionTile(
+          //       icon: Icons.travel_explore_rounded,
+          //       iconColor: const Color(0xFF7C4DFF),
+          //       title: 'Run one swing cycle now',
+          //       subtitle: 'Manually trigger swing AI — uses web search',
+          //       subtitle2: 'Browses Indian financial news live via Claude',
+          //       loading: _isSwingTriggering,
+          //       onTap: _runSwingCycle,
+          //     ),
+          //     Divider(color: Colors.white.withOpacity(0.06)),
+          //     _ActionTile(
+          //       icon: Icons.restart_alt_rounded,
+          //       iconColor: const Color(0xFF7C4DFF).withOpacity(0.8),
+          //       title: 'Reset swing portfolio',
+          //       subtitle: 'Reset swing to ₹10,000 and clear swing history',
+          //       subtitle2: 'Only available when market is closed',
+          //       loading: _isSwingResetting,
+          //       onTap: _resetSwingPortfolio,
+          //       destructive: false,
+          //     ),
+          //   ],
+          // ),
+          //
+          // const SizedBox(height: 24),
 
           // ── About ──────────────────────────────────────────
           _SectionHeader(label: 'ABOUT'),
@@ -333,7 +333,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _InfoTile(
                 icon: Icons.info_outline_rounded,
                 label: 'Version',
-                value: '1.0.0',
+                value: '1.0.2',
               ),
             ],
           ),
