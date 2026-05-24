@@ -58,7 +58,7 @@ const {
   calculateUnrealizedPnL,
 } = require("./firestore_manager");
 
-// ── Swing trading modules ────────────────────────────────────
+// ── Old India-only swing modules (kept for backward compat) ──
 const { getSwingDecision } = require("./swing_trader");
 const {
   getSwingPortfolioState,
@@ -68,6 +68,11 @@ const {
   recordSwingAILog,
   calculateSwingUnrealizedPnL,
 } = require("./swing_manager");
+
+// ── NEW: Global multi-market swing (India + US + Germany + Japan) ──
+// Replaces the India-only swing loop above for multi-market operation.
+// Configure API key: firebase functions:config:set eodhd.api_key="YOUR_KEY"
+const { runGlobalSwingCycle } = require("./global_swing/index");
 
 // ─────────────────────────────────────────────────────────────
 // Market Hours Helpers
@@ -987,6 +992,145 @@ exports.resetSwingPortfolio = functions
       return { success: true, message: "Swing portfolio reset to ₹10,000 successfully." };
     } catch (err) {
       logger.error("resetSwingPortfolio failed:", err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+// ═════════════════════════════════════════════════════════════
+// GLOBAL SWING FUNCTIONS (India + USA + Germany + Japan)
+// ═════════════════════════════════════════════════════════════
+// These replace the India-only swingLoop above.
+// NOTE: You can disable swingLoop by removing its export while keeping
+// globalSwingLoop active. Both can run simultaneously without conflict
+// (they write to separate Firestore collections).
+//
+// SETUP: firebase functions:config:set eodhd.api_key="YOUR_PAID_KEY"
+// CAPITAL: Set inrCash:50000 + usdCash:600 in Firestore
+//          global_swing_portfolio/state (auto-initialised on first run)
+// ═════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 8: globalSwingLoop — runs every hour, all timezones
+// ─────────────────────────────────────────────────────────────
+/**
+ * Runs ARJUN's global multi-market swing cycle every hour.
+ *
+ * Schedule: every hour at :20 past, Mon–Fri (UTC).
+ * The cycle itself checks which markets are currently OPEN and
+ * BULLISH — no wasted work when all markets are closed.
+ *
+ * Market coverage + IST hours:
+ *   🇯🇵 Japan  (TSE)   05:30–12:00 IST  (JST 09:00–15:30)
+ *   🇮🇳 India  (NSE)   09:15–15:30 IST
+ *   🇩🇪 Germany(XETRA) 13:30–22:00 IST  (CET 09:00–17:30)
+ *   🇺🇸 USA    (NYSE)  19:30–01:30 IST  (ET  09:30–16:00)
+ *
+ * Key improvements over old swingLoop:
+ *   - No web_search tool (removed entirely)
+ *   - 30-day OHLCV history → real RSI, EMA, 52W proximity
+ *   - "Invest only in BULLISH markets" logic
+ *   - 52W-high guard (prevents COFORGE-style trades)
+ *   - Writes to global_swing_* Firestore collections (separate from old swing)
+ */
+exports.globalSwingLoop = functions
+  .runWith({
+    timeoutSeconds: 540,
+    memory:         "512MB",
+  })
+  .pubsub
+  .schedule("20 * * * 1-5")   // Every hour at :20 past, Mon–Fri UTC
+  .timeZone("UTC")
+  .onRun(async () => {
+    try {
+      await runGlobalSwingCycle();
+    } catch (err) {
+      logger.error("Unhandled error in globalSwingLoop:", err);
+    }
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 9: manualGlobalSwingTrigger — HTTPS Callable (Flutter)
+// ─────────────────────────────────────────────────────────────
+/**
+ * Manually trigger one global swing cycle from the Flutter app
+ * Settings screen. Useful for testing outside market hours.
+ */
+exports.manualGlobalSwingTrigger = functions
+  .runWith({
+    timeoutSeconds: 540,
+    memory:         "512MB",
+  })
+  .https
+  .onCall(async (data, context) => {
+    logger.info("Manual global swing trigger called from Flutter app");
+    try {
+      const result = await runGlobalSwingCycle();
+      return { success: true, result };
+    } catch (err) {
+      logger.error("manualGlobalSwingTrigger error:", err);
+      return { success: false, error: err.message };
+    }
+  });
+
+// ─────────────────────────────────────────────────────────────
+// FUNCTION 10: resetGlobalPortfolio — HTTPS Callable (Flutter)
+// ─────────────────────────────────────────────────────────────
+/**
+ * Resets the global swing portfolio to the default starting capital
+ * (₹50,000 INR + $600 USD = ₹1,00,000 total).
+ * Clears all global_swing_trades, global_swing_ai_logs, and snapshots.
+ * Can only run outside market hours (any market).
+ */
+exports.resetGlobalPortfolio = functions
+  .runWith({ timeoutSeconds: 180 })
+  .https
+  .onCall(async (data, context) => {
+    logger.info("Global portfolio reset requested");
+
+    try {
+      const db    = admin.firestore();
+      const batch = db.batch();
+
+      // Clear trade history
+      const trades = await db.collection("global_swing_trades").get();
+      trades.docs.forEach(doc => batch.delete(doc.ref));
+
+      // Clear AI logs
+      const logs = await db.collection("global_swing_ai_logs").get();
+      logs.docs.forEach(doc => batch.delete(doc.ref));
+
+      // Clear snapshots sub-collection
+      const snaps = await db
+        .collection("global_swing_portfolio")
+        .doc("state")
+        .collection("snapshots")
+        .get();
+      snaps.docs.forEach(doc => batch.delete(doc.ref));
+
+      await batch.commit();
+
+      // Re-initialize with default capital
+      await db.collection("global_swing_portfolio").doc("state").set({
+        baseCurrency:     "INR",
+        startingCapital:  100000,
+        inrCash:          50000,    // ₹50,000 for India trades
+        usdCash:          600.00,   // $600 for US + Germany + Japan trades
+        usdInrRate:       83.5,
+        totalValueINR:    100000,
+        holdings:         [],
+        recentSells:      [],
+        lastDaysHeldDate: null,
+        lastUpdated:      admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info("Global portfolio reset: ₹50,000 INR + $600 USD");
+      return {
+        success: true,
+        message: "Global portfolio reset to ₹50,000 INR + $600 USD (≈ ₹1,00,000 total).",
+      };
+    } catch (err) {
+      logger.error("resetGlobalPortfolio failed:", err.message);
       return { success: false, error: err.message };
     }
   });

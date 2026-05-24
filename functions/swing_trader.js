@@ -40,12 +40,10 @@
  */
 
 const Anthropic = require("@anthropic-ai/sdk");
-const functions = require("firebase-functions");
 const logger = require("firebase-functions/logger");
 
-const ANTHROPIC_API_KEY =
-  (functions.config().anthropic && functions.config().anthropic.api_key) ||
-  process.env.ANTHROPIC_API_KEY;
+// Anthropic API key — set in functions/.env as ANTHROPIC_API_KEY
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
