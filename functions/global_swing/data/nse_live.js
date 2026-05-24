@@ -134,4 +134,58 @@ async function getNSENiftyIndex() {
   }
 }
 
-module.exports = { getNSELivePrices, getNSENiftyIndex };
+/**
+ * Scan the full Nifty 500 universe for today's top gainers.
+ * Uses the SAME free API call as getNSELivePrices — zero extra EODHD cost.
+ * This replaces the fixed India watchlist for candidate discovery.
+ *
+ * The Nifty 500 index covers the top 500 stocks by market cap on NSE,
+ * representing ~95% of total NSE market capitalisation.
+ *
+ * @param {number} minChangePct  - Min % gain to qualify (default 1.0%)
+ * @param {number} minVolume     - Min shares traded (default 200,000)
+ * @param {number} topN          - Max results to return (default 25)
+ * @returns {Promise<Array>}     - Array of { symbol, price, changePct, volume }
+ *                                 Returns [] if NSE API is unavailable.
+ */
+async function getNSEBroadMovers(minChangePct = 1.0, minVolume = 200000, topN = 25) {
+  try {
+    const cookie  = await getNseCookie();
+    const headers = cookie ? { ...NSE_HEADERS, Cookie: cookie } : NSE_HEADERS;
+
+    const { data } = await nseAxios.get(
+      "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
+      { headers }
+    );
+
+    const stocks = (data?.data || []).filter(s => s.symbol && s.symbol !== "NIFTY 500");
+
+    const movers = stocks
+      .filter(s => {
+        const pct = parseFloat(s.pChange || 0);
+        const vol = parseInt(s.totalTradedVolume || 0, 10);
+        const price = parseFloat(s.lastPrice || 0);
+        return pct >= minChangePct && vol >= minVolume && price > 1;
+      })
+      .sort((a, b) => parseFloat(b.pChange) - parseFloat(a.pChange))
+      .slice(0, topN)
+      .map(s => ({
+        symbol:    `${s.symbol}.NSE`,
+        price:     Number(parseFloat(s.lastPrice || 0).toFixed(2)),
+        changePct: Number(parseFloat(s.pChange   || 0).toFixed(2)),
+        volume:    parseInt(s.totalTradedVolume   || 0, 10),
+      }));
+
+    logger.info(
+      `NSE broad scan: ${movers.length} movers ≥ +${minChangePct}% ` +
+      `from full Nifty 500 (${stocks.length} stocks scanned)`
+    );
+    return movers;
+
+  } catch (err) {
+    logger.warn(`NSE broad scan failed — will fallback to watchlist: ${err.message}`);
+    return [];
+  }
+}
+
+module.exports = { getNSELivePrices, getNSENiftyIndex, getNSEBroadMovers };

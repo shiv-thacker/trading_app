@@ -34,7 +34,8 @@ const logger = require("firebase-functions/logger");
 // ── Data layer ────────────────────────────────────────────────
 const { getLiveQuotes, getTopMovers, getLiveUsdInrRate } = require("./data/eodhd_live");
 const { getBatchHistoricalCandles }         = require("./data/eodhd_history");
-const { getNSELivePrices }                  = require("./data/nse_live");
+const { getNSELivePrices, getNSEBroadMovers } = require("./data/nse_live");
+const { getDynamicTopMovers }               = require("./data/eodhd_screener");
 const { clearEohdCache }                    = require("./data/eodhd_client");
 
 // ── Analysis layer ────────────────────────────────────────────
@@ -194,17 +195,47 @@ async function runGlobalSwingCycle() {
   portfolio.totalValueINR = calcTotalValueINR(portfolio);
 
   // ── ⑤ Top movers from BULLISH open markets ──────────────────
-  // Only scan watchlists for markets that are OPEN + BULLISH.
-  // For each qualifying stock, we also fetch 30-day history → indicators.
+  // PRIMARY: scan the full exchange dynamically each cycle.
+  //   India  → NSE free API  (full Nifty 500, 500 stocks, 0 EODHD credits)
+  //   US/DE/JP → EODHD Screener (full exchange scan, $29.99 plan)
+  //
+  // FALLBACK: if primary scanner unavailable → use expanded watchlist.
+  //
   const candidates = {}; // { "NSE": [{symbol, price, changePct, indicators}], ... }
 
   for (const mood of bullishOpen) {
     const market = MARKETS[mood.marketCode];
-    if (!market?.watchlist) continue;
+    if (!market) continue;
 
     try {
-      const movers = await getTopMovers(market.watchlist, R.MIN_CHANGE_PCT, 8);
+      let movers = [];
+
+      if (mood.marketCode === "NSE") {
+        // ── India: NSE free API scans full Nifty 500 ──────────────
+        movers = await getNSEBroadMovers(R.MIN_CHANGE_PCT, 200000, 25);
+
+        if (movers.length === 0) {
+          // Fallback: NSE API blocked (GCP 403) → use watchlist
+          logger.warn("NSE broad scan returned 0 — falling back to watchlist");
+          movers = await getTopMovers(market.watchlist, R.MIN_CHANGE_PCT, 15);
+        }
+      } else {
+        // ── US / Germany / Japan: EODHD Screener (full exchange) ──
+        movers = await getDynamicTopMovers(mood.marketCode, R.MIN_CHANGE_PCT, 25);
+
+        if (movers.length === 0) {
+          // Fallback: screener unavailable → use expanded watchlist
+          logger.warn(`${mood.marketCode} screener returned 0 — falling back to watchlist`);
+          movers = await getTopMovers(market.watchlist, R.MIN_CHANGE_PCT, 15);
+        }
+      }
+
       if (movers.length === 0) continue;
+
+      logger.info(
+        `${mood.flag} ${mood.marketCode}: scanning ${movers.length} movers ` +
+        `(from full ${mood.marketCode === "NSE" ? "Nifty 500" : "exchange"} scan)`
+      );
 
       // Fetch 30-day OHLCV for candidates (needed for technical indicators)
       const candleMap = await getBatchHistoricalCandles(movers.map(m => m.symbol));
@@ -227,8 +258,12 @@ async function runGlobalSwingCycle() {
       });
 
       if (filtered.length > 0) {
-        candidates[mood.marketCode] = filtered;
-        logger.info(`${mood.flag} ${mood.marketCode} candidates: ${filtered.length} qualified (from ${movers.length} movers)`);
+        // Cap at 12 per market for Claude's prompt size
+        candidates[mood.marketCode] = filtered.slice(0, 12);
+        logger.info(
+          `${mood.flag} ${mood.marketCode} candidates: ` +
+          `${filtered.length} qualified → ${candidates[mood.marketCode].length} sent to Claude`
+        );
       }
 
     } catch (err) {
