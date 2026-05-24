@@ -54,6 +54,20 @@ module.exports = {
   BULLISH_TODAY_PCT:       0.4,    // Today's change > +0.4% helps tilt to BULLISH
   BEARISH_TODAY_PCT:      -0.4,    // Today's change < -0.4% helps tilt to BEARISH
 
+  // ── News sentiment thresholds (EODHD /api/sentiments) ───────
+  // Sentiment is a normalized score from -1 (very negative) to +1 (very positive)
+  // aggregated from news + social media for proxy stocks in each market.
+  SENTIMENT_BULLISH_THRESHOLD:  0.15,   // avg sentiment > +0.15 → positive tilt
+  SENTIMENT_BEARISH_THRESHOLD: -0.15,   // avg sentiment < -0.15 → negative tilt
+
+  // Score weight mix: open market  → 50% 5d price + 30% today % + 20% sentiment
+  //                   closed market → 65% 5d price + 35% sentiment (no live "today")
+  MOOD_WEIGHT_5D_OPEN:         0.50,
+  MOOD_WEIGHT_TODAY_OPEN:      0.30,
+  MOOD_WEIGHT_SENTIMENT_OPEN:  0.20,
+  MOOD_WEIGHT_5D_CLOSED:       0.65,
+  MOOD_WEIGHT_SENTIMENT_CLOSED:0.35,
+
   // ── IBKR live trading ────────────────────────────────────────
   // Set to "LIVE" + configure IBKR API keys in Firebase config to go live.
   // Currently "PAPER" — all trades simulate in Firestore only.

@@ -22,8 +22,19 @@
 const { eohdGet } = require("./eodhd_client");
 const logger      = require("firebase-functions/logger");
 
-const LIVE_TTL = 5 * 60 * 1000;   // 5-minute cache
-const FX_TTL   = 60 * 60 * 1000;  // 60-minute cache for FX rates (changes slowly)
+const LIVE_TTL      = 5  * 60 * 1000;   // 5-minute cache
+const FX_TTL        = 60 * 60 * 1000;   // 60-minute cache for FX rates
+const SENTIMENT_TTL = 60 * 60 * 1000;   // 60-minute cache for sentiment (daily data)
+
+// ── Proxy symbols used to measure market-wide sentiment ─────────────────────
+// We average the sentiment of 3 large, liquid stocks per market as a proxy
+// for the whole market. These are the highest-weight names in each index.
+const MARKET_SENTIMENT_PROXIES = {
+  NSE:   ["RELIANCE.NSE",  "TCS.NSE",      "HDFCBANK.NSE"],
+  US:    ["SPY.US",        "AAPL.US",       "MSFT.US"],
+  XETRA: ["SAP.XETRA",    "SIE.XETRA",     "BMW.XETRA"],
+  T:     ["7203.T",        "6758.T",        "9984.T"],
+};
 
 // ─────────────────────────────────────────────────────────────
 // Live FX rate fetcher
@@ -160,4 +171,79 @@ async function getTopMovers(watchlist, minChangePct = 1.0, topN = 10) {
   return movers;
 }
 
-module.exports = { getLiveQuotes, getLiveIndex, getTopMovers, getLiveUsdInrRate };
+/**
+ * Fetch EODHD sentiment scores for all 4 markets in one batch.
+ * Uses 3 proxy stocks per market and averages to get market-wide sentiment.
+ *
+ * EODHD /api/sentiments returns a normalized score per ticker per day:
+ *   -1 = very negative, 0 = neutral, +1 = very positive
+ *
+ * API cost: 5 base + (12 symbols × 5) = 65 credits per call.
+ * Cached for 1 hour — sentiment is daily, not tick-by-tick.
+ *
+ * @returns {Promise<Object>} Map: { NSE: 0.32, US: -0.12, XETRA: 0.05, T: 0.21 }
+ *                            null means sentiment unavailable for that market.
+ */
+async function getAllMarketSentiments() {
+  const today      = new Date().toISOString().split("T")[0];
+  const yesterday  = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+  const allSymbols = Object.values(MARKET_SENTIMENT_PROXIES).flat();
+  const cacheKey   = `sentiment_all_${today}`;
+
+  let rawData;
+  try {
+    rawData = await eohdGet(
+      "/sentiments",
+      { s: allSymbols.join(","), from: yesterday, to: today },
+      cacheKey,
+      SENTIMENT_TTL
+    );
+  } catch (err) {
+    logger.warn("Sentiment fetch failed (non-fatal):", err.message);
+    return {};
+  }
+
+  if (!rawData || typeof rawData !== "object") return {};
+
+  const results = {};
+
+  for (const [marketCode, proxies] of Object.entries(MARKET_SENTIMENT_PROXIES)) {
+    const scores = [];
+
+    for (const sym of proxies) {
+      const entries = rawData[sym];
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+
+      // Prefer today's score; fall back to yesterday's
+      const todayEntry = entries.find(e => e.date === today);
+      const entry      = todayEntry || entries[entries.length - 1];
+
+      if (entry && typeof entry.normalized === "number" && entry.count >= 2) {
+        scores.push(entry.normalized);
+      }
+    }
+
+    if (scores.length > 0) {
+      const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+      results[marketCode] = Math.round(avg * 1000) / 1000;
+      logger.info(
+        `Sentiment [${marketCode}]: ${results[marketCode].toFixed(3)} ` +
+        `(from ${scores.length}/${proxies.length} proxies)`
+      );
+    } else {
+      results[marketCode] = null; // not enough data — won't affect mood score
+      logger.info(`Sentiment [${marketCode}]: no data`);
+    }
+  }
+
+  return results;
+}
+
+module.exports = {
+  getLiveQuotes,
+  getLiveIndex,
+  getTopMovers,
+  getLiveUsdInrRate,
+  getAllMarketSentiments,
+  MARKET_SENTIMENT_PROXIES,
+};

@@ -4,14 +4,28 @@
  * Determines if each market is BULLISH, BEARISH, or NEUTRAL.
  * This drives the "invest only in bullish markets" strategy.
  *
- * HOW MOOD IS COMPUTED:
- *   Combined score = (5-day index trend × 60%) + (today's change × 40%)
+ * HOW MOOD IS COMPUTED (3-signal blend):
+ *
+ *   Market OPEN:
+ *     score = (5-day index trend × 50%) + (today's live % × 30%) + (news sentiment × 20%)
+ *
+ *   Market CLOSED (pre-market / after-hours):
+ *     score = (5-day index trend × 65%) + (news sentiment × 35%)
+ *     → "today %" is stale when closed, so we lean on sentiment instead
+ *
  *   BULLISH  → score > threshold (set in trading_rules.js)
  *   BEARISH  → score < threshold
  *   NEUTRAL  → in between
  *
- *   India (NSE): Nifty 50 via NSE direct (real-time) + EODHD history
- *   Others:      EODHD /real-time/{indexSymbol} + EODHD history
+ * SENTIMENT SOURCE:
+ *   EODHD /api/sentiments endpoint — 3 proxy stocks per market averaged.
+ *   Returns a normalized -1 to +1 score from news + social media.
+ *   Cached 1 hour. Non-fatal if unavailable (falls back to price-only).
+ *
+ *   India (NSE): Reliance, TCS, HDFC Bank
+ *   USA:         SPY ETF, Apple, Microsoft
+ *   Germany:     SAP, Siemens, BMW
+ *   Japan:       Toyota, Sony, SoftBank
  *
  * MARKET OPEN CHECK:
  *   Uses each exchange's local timezone (from markets.js).
@@ -19,12 +33,12 @@
  *   Mood is still computed for closed markets (useful for planning).
  */
 
-const { getLiveIndex }          = require("../data/eodhd_live");
-const { getNSENiftyIndex }      = require("../data/nse_live");
-const { getHistoricalCandles }  = require("../data/eodhd_history");
-const { MARKETS }               = require("../config/markets");
-const R                         = require("../config/trading_rules");
-const logger                    = require("firebase-functions/logger");
+const { getLiveIndex, getAllMarketSentiments } = require("../data/eodhd_live");
+const { getNSENiftyIndex }                    = require("../data/nse_live");
+const { getHistoricalCandles }                = require("../data/eodhd_history");
+const { MARKETS }                             = require("../config/markets");
+const R                                       = require("../config/trading_rules");
+const logger                                  = require("firebase-functions/logger");
 
 /**
  * Check if a given market (by code) is currently open.
@@ -66,23 +80,27 @@ function isMarketOpen(marketCode) {
 
 /**
  * Compute the mood for a single market.
- * Fetches live index + 5-day history in parallel for speed.
+ * Blends 5-day price trend + today's live % + news sentiment into one score.
  *
- * @param {string} marketCode
+ * When the market is CLOSED, "today %" is stale so we use sentiment instead:
+ *   OPEN  → 50% 5d trend + 30% today % + 20% sentiment
+ *   CLOSED→ 65% 5d trend + 35% sentiment
+ *
+ * @param {string}      marketCode - "NSE" | "US" | "XETRA" | "T"
+ * @param {number|null} sentiment  - Pre-fetched sentiment (-1 to +1), or null
  * @returns {Promise<Object>} Full mood object with score, status, prices
  */
-async function getMarketMood(marketCode) {
+async function getMarketMood(marketCode, sentiment = null) {
   const market = MARKETS[marketCode];
   if (!market) throw new Error(`Unknown market code: ${marketCode}`);
 
-  const isOpen        = isMarketOpen(marketCode);
+  const isOpen          = isMarketOpen(marketCode);
   let   todayChangePct  = 0;
   let   fiveDayChangePct = 0;
   let   indexPrice      = 0;
 
   // ── Fetch live index + 5-day history in parallel ─────────────
   const [liveResult, historyResult] = await Promise.allSettled([
-    // Live index — India tries NSE first
     (async () => {
       if (marketCode === "NSE" && market.useNSELiveFallback) {
         const nseData = await getNSENiftyIndex();
@@ -90,12 +108,9 @@ async function getMarketMood(marketCode) {
       }
       return await getLiveIndex(market.indexSymbol);
     })(),
-
-    // 5-day trend from EOD history
     getHistoricalCandles(market.indexSymbol),
   ]);
 
-  // Process live result
   if (liveResult.status === "fulfilled" && liveResult.value) {
     const live = liveResult.value;
     todayChangePct = Number((live.changePct || 0).toFixed(2));
@@ -104,11 +119,10 @@ async function getMarketMood(marketCode) {
     logger.warn(`Market mood: live index unavailable for ${marketCode}`);
   }
 
-  // Process 5-day history
   if (historyResult.status === "fulfilled" && Array.isArray(historyResult.value)) {
     const candles = historyResult.value;
     if (candles.length >= 6) {
-      const slice  = candles.slice(-6); // 6 candles → 5 daily changes
+      const slice  = candles.slice(-6);
       const oldest = Number(slice[0].close);
       const newest = Number(slice[slice.length - 1].close);
       if (oldest > 0) {
@@ -119,26 +133,64 @@ async function getMarketMood(marketCode) {
     logger.warn(`Market mood: history unavailable for ${marketCode}`);
   }
 
-  // ── Score and classify ───────────────────────────────────────
-  // Weight: 60% from 5-day trend + 40% from today's move
-  const score = Math.round(
-    (fiveDayChangePct * 0.60 + todayChangePct * 0.40) * 100
-  ) / 100;
+  // ── 3-signal score ────────────────────────────────────────────
+  // Sentiment is on a -1..+1 scale; price % is on a -5..+5 typical range.
+  // Normalise sentiment to the same rough scale: multiply by 5 so ±1 sentiment
+  // contributes roughly the same weight as a ±5% price move.
+  const sentimentScaled = typeof sentiment === "number" ? sentiment * 5 : null;
+  const hasSentiment    = sentimentScaled !== null;
+
+  let score;
+  if (isOpen) {
+    // OPEN: live data + sentiment
+    const w5d   = hasSentiment ? R.MOOD_WEIGHT_5D_OPEN        : 0.60;
+    const wDay  = hasSentiment ? R.MOOD_WEIGHT_TODAY_OPEN      : 0.40;
+    const wSent = hasSentiment ? R.MOOD_WEIGHT_SENTIMENT_OPEN  : 0;
+    score = Math.round(
+      (fiveDayChangePct * w5d + todayChangePct * wDay + (sentimentScaled || 0) * wSent) * 100
+    ) / 100;
+  } else {
+    // CLOSED: "today %" is stale — lean on sentiment for the dynamic portion
+    const w5d   = hasSentiment ? R.MOOD_WEIGHT_5D_CLOSED        : 1.0;
+    const wSent = hasSentiment ? R.MOOD_WEIGHT_SENTIMENT_CLOSED  : 0;
+    score = Math.round(
+      (fiveDayChangePct * w5d + (sentimentScaled || 0) * wSent) * 100
+    ) / 100;
+  }
+
+  // ── Classify ─────────────────────────────────────────────────
+  // Primary signal: 5-day trend
+  // Secondary: today % (if open) or sentiment (if closed) can flip a borderline neutral
+  const sentimentPositive = hasSentiment && sentiment  >  R.SENTIMENT_BULLISH_THRESHOLD;
+  const sentimentNegative = hasSentiment && sentiment  <  R.SENTIMENT_BEARISH_THRESHOLD;
 
   let mood;
-  if (fiveDayChangePct >= R.BULLISH_INDEX_5D_PCT || todayChangePct >= R.BULLISH_TODAY_PCT * 2) {
+  if (fiveDayChangePct >= R.BULLISH_INDEX_5D_PCT) {
     mood = "BULLISH";
-  } else if (fiveDayChangePct <= R.BEARISH_INDEX_5D_PCT || todayChangePct <= R.BEARISH_TODAY_PCT * 2) {
+  } else if (fiveDayChangePct <= R.BEARISH_INDEX_5D_PCT) {
+    mood = "BEARISH";
+  } else if (isOpen && todayChangePct >= R.BULLISH_TODAY_PCT * 2) {
+    mood = "BULLISH";
+  } else if (isOpen && todayChangePct <= R.BEARISH_TODAY_PCT * 2) {
+    mood = "BEARISH";
+  } else if (sentimentPositive) {
+    // Market closed or neutral price trend — positive news tips it bullish
+    mood = "BULLISH";
+  } else if (sentimentNegative) {
     mood = "BEARISH";
   } else {
     mood = "NEUTRAL";
   }
 
+  const sentimentLabel = hasSentiment
+    ? `sentiment=${sentiment > 0 ? "+" : ""}${sentiment.toFixed(3)}`
+    : "sentiment=n/a";
+
   logger.info(
     `Market mood [${market.flag} ${marketCode}]: ${mood} | ` +
     `today=${todayChangePct > 0 ? "+" : ""}${todayChangePct}% | ` +
     `5d=${fiveDayChangePct > 0 ? "+" : ""}${fiveDayChangePct}% | ` +
-    `open=${isOpen}`
+    `${sentimentLabel} | score=${score} | open=${isOpen}`
   );
 
   return {
@@ -153,19 +205,31 @@ async function getMarketMood(marketCode) {
     indexPrice,
     todayChangePct,
     fiveDayChangePct,
+    sentiment:        hasSentiment ? sentiment : null,
     score,
   };
 }
 
 /**
  * Evaluate all configured markets and return their mood objects.
- * Runs all 4 markets in parallel (faster than sequential).
+ * Fetches EODHD sentiment for all 4 markets in ONE batch call first,
+ * then runs all 4 market mood calculations in parallel (with sentiment passed in).
  *
  * @returns {Promise<Object>} Map: { NSE: {...}, US: {...}, XETRA: {...}, T: {...} }
  */
 async function getAllMarketMoods() {
+  // Fetch sentiment for all 4 markets in one API call (non-fatal)
+  let sentiments = {};
+  try {
+    sentiments = await getAllMarketSentiments();
+  } catch (err) {
+    logger.warn("Sentiment batch fetch failed — proceeding without sentiment:", err.message);
+  }
+
   const codes   = Object.keys(MARKETS);
-  const settled = await Promise.allSettled(codes.map(code => getMarketMood(code)));
+  const settled = await Promise.allSettled(
+    codes.map(code => getMarketMood(code, sentiments[code] ?? null))
+  );
 
   const moods = {};
   for (const r of settled) {

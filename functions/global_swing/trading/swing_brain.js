@@ -45,7 +45,9 @@ You hold positions for 3–14 days. You trade for an Indian investor via LRS.
 YOUR DATA INPUTS (provided each cycle — no web search needed):
   - Real 30-day OHLCV candles for every candidate and every holding
   - Computed RSI, EMA9, EMA20, 52W proximity, volume ratio for each stock
-  - Each market's index trend (today + 5-day) → BULLISH / NEUTRAL / BEARISH mood
+  - Each market's index trend (today + 5-day) + news sentiment score → BULLISH / NEUTRAL / BEARISH mood
+  - News sentiment: EODHD aggregated score (-1 very negative → +1 very positive) from proxy stocks
+    Especially useful for CLOSED markets where "today %" is stale overnight data
   - Portfolio state: unified ₹ capital pool, current holdings with live P&L
 
 ═══════════════════════════════════════════════════════
@@ -117,9 +119,9 @@ RESPOND WITH ONLY THIS JSON (no markdown, no extra text):
 ═══════════════════════════════════════════════════════
 {
   "thoughts": [
-    "Market ranking: all 4 markets ranked by score — which is #1 today and why",
-    "Cross-market comparison: best candidate in each bullish market vs others",
-    "Holdings review: exit signals for each current holding",
+    "Market ranking: all 4 markets ranked — price trend + news sentiment combined score. Which is #1 today and why?",
+    "Sentiment insight: any market where news sentiment contradicts price trend (e.g. closed but very positive news)?",
+    "Cross-market comparison: best candidate in each bullish+open market vs others",
     "Capital decision: which market(s) get money today, or hold cash if none qualify"
   ],
   "marketAnalysis": "2-3 sentences on global market state and what to watch",
@@ -188,17 +190,24 @@ function buildUserPrompt({ portfolio, marketMoods, candidates, holdingsWithHisto
 
   const ranked = Object.values(marketMoods).sort((a, b) => b.score - a.score);
   ranked.forEach((m, i) => {
-    const rank    = `#${i + 1}`.padEnd(4);
-    const status  = m.isOpen ? "🟢 OPEN  " : "🔴 CLOSED";
-    const moodStr = m.mood === "BULLISH" ? "📈 BULLISH" :
-                    m.mood === "BEARISH" ? "📉 BEARISH" : "➡️  NEUTRAL";
-    const eligible = m.isOpen && m.mood === "BULLISH" ? " ← can BUY" : "";
+    const rank       = `#${i + 1}`.padEnd(4);
+    const status     = m.isOpen ? "🟢 OPEN  " : "🔴 CLOSED";
+    const moodStr    = m.mood === "BULLISH" ? "📈 BULLISH" :
+                       m.mood === "BEARISH" ? "📉 BEARISH" : "➡️  NEUTRAL";
+    const eligible   = m.isOpen && m.mood === "BULLISH" ? " ← can BUY" : "";
+    const sentLabel  = typeof m.sentiment === "number"
+      ? `  news-sentiment: ${m.sentiment > 0 ? "+" : ""}${m.sentiment.toFixed(3)} ${m.sentiment > 0.15 ? "🟢" : m.sentiment < -0.15 ? "🔴" : "⚪"}`
+      : "  news-sentiment: n/a";
+    const openNote   = !m.isOpen
+      ? "  [CLOSED — sentiment is the main forward signal]"
+      : "";
     lines.push(
       `${rank}${m.flag} ${m.marketCode.padEnd(6)} [${status}] [${moodStr}] ` +
       `index: ${m.indexSymbol}  ` +
       `today: ${m.todayChangePct >= 0 ? "+" : ""}${m.todayChangePct}%  ` +
-      `5-day: ${m.fiveDayChangePct >= 0 ? "+" : ""}${m.fiveDayChangePct}%  ` +
-      `score: ${m.score}${eligible}`
+      `5-day: ${m.fiveDayChangePct >= 0 ? "+" : ""}${m.fiveDayChangePct}%` +
+      sentLabel +
+      `  score: ${m.score}${eligible}${openNote}`
     );
   });
 
