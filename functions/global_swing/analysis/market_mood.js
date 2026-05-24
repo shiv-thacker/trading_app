@@ -192,4 +192,21 @@ function selectBullishOpenMarkets(moods) {
     .sort((a, b) => b.score - a.score);
 }
 
-module.exports = { getMarketMood, getAllMarketMoods, selectBullishOpenMarkets, isMarketOpen };
+/**
+ * Rank ALL markets by mood score (strongest first).
+ * Used in prompts so ARJUN compares India vs Japan vs Germany vs USA every cycle.
+ *
+ * @param {Object} moods - Output of getAllMarketMoods()
+ * @returns {Array}      - All mood objects sorted by score descending
+ */
+function rankAllMarkets(moods) {
+  return Object.values(moods).sort((a, b) => b.score - a.score);
+}
+
+module.exports = {
+  getMarketMood,
+  getAllMarketMoods,
+  selectBullishOpenMarkets,
+  rankAllMarkets,
+  isMarketOpen,
+};

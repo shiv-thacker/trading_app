@@ -1,18 +1,16 @@
 /// screens/ai_brain_screen.dart
 /// ================================
-/// Live feed of ARJUN's AI reasoning — split into two tabs:
+/// Live feed of ARJUN's AI reasoning.
 ///
-///   ⚡ INTRADAY  — 5-minute cycle logs (NSE live data, pure technical)
-///   📈 SWING     — Hourly cycle logs   (web search + fundamental + technical)
+///   🌐 GLOBAL    — Hourly multi-market logs (India+US+Germany+Japan, EODHD data)
 ///
-/// Each tab shows:
-///   - Header chips: market sentiment + portfolio health
-///   - "Next ARJUN will watch for" card
-///   - Scrollable log feed (newest at top) with terminal-style thoughts
+/// Each entry shows:
+///   - Header chips: overall sentiment + portfolio health + open/bullish markets
+///   - "ARJUN will watch for" card
+///   - Terminal-style thought log with colour-coded reasoning steps
 ///
 /// DATA:
-///   Intraday: aiLogsStream()      — last 50 logs from ai_logs
-///   Swing:    swingAiLogsStream() — last 30 logs from swing_ai_logs
+///   Global swing: globalSwingAiLogsStream() — last 30 from global_swing_ai_logs
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,10 +23,10 @@ import '../services/firestore_service.dart';
 import 'dashboard_screen.dart' show aiLogsProvider;
 
 // ─────────────────────────────────────────────────────────────
-// Swing AI logs provider
+// Global swing AI logs provider (multi-market, primary)
 // ─────────────────────────────────────────────────────────────
 final swingAiLogsProvider = StreamProvider<List<AILog>>((ref) {
-  return ref.read(firestoreServiceProvider).swingAiLogsStream();
+  return ref.read(firestoreServiceProvider).globalSwingAiLogsStream();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -92,7 +90,7 @@ class AIBrainScreen extends StatelessWidget {
                 unselectedLabelStyle: GoogleFonts.jetBrainsMono(fontSize: 11),
                 tabs: const [
                   // Tab(text: '⚡  INTRADAY'), // intraday disabled
-                  Tab(text: '📈  SWING'),
+                  Tab(text: '🌐  GLOBAL'),
                 ],
               ),
             ),
@@ -167,14 +165,14 @@ class _SwingLogsFeed extends ConsumerWidget {
         child: Text('Error: $e', style: const TextStyle(color: Colors.red)),
       ),
       data: (logs) {
-        if (logs.isEmpty) return const _EmptyBrain(mode: 'swing');
+        if (logs.isEmpty) return const _EmptyBrain(mode: 'global');
 
         final latest = logs.first;
         return Column(
           children: [
             _HeaderChips(log: latest, isSwing: true),
             if (latest.nextFocus.isNotEmpty)
-              _NextFocusCard(focus: latest.nextFocus, accentColor: const Color(0xFF7C4DFF)),
+              _NextFocusCard(focus: latest.nextFocus, accentColor: const Color(0xFF00C853)),
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.only(top: 8, bottom: 24),
@@ -197,37 +195,113 @@ class _HeaderChips extends StatelessWidget {
   final bool isSwing;
   const _HeaderChips({required this.log, this.isSwing = false});
 
+  String _marketFlag(String name) {
+    switch (name) {
+      case 'India':   return '🇮🇳';
+      case 'USA':     return '🇺🇸';
+      case 'Germany': return '🇩🇪';
+      case 'Japan':   return '🇯🇵';
+      default:        return '🌐';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // For swing logs, check if webSearchUsed is stored (Firestore extra field)
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Chip(
-            label: log.marketSentiment,
-            color: _sentimentColor(log.marketSentiment),
-            prefix: '📊 ',
+          Row(
+            children: [
+              _Chip(
+                label: log.marketSentiment,
+                color: _sentimentColor(log.marketSentiment),
+                prefix: '📊 ',
+              ),
+              const SizedBox(width: 10),
+              _Chip(
+                label: log.portfolioHealth,
+                color: _healthColor(log.portfolioHealth),
+                prefix: '💼 ',
+              ),
+              // EODHD data chip (replaces WEB SEARCH)
+              if (isSwing) ...[
+                const SizedBox(width: 10),
+                _Chip(
+                  label: 'EODHD',
+                  color: const Color(0xFF00BCD4),
+                  prefix: '📡 ',
+                ),
+              ],
+              const Spacer(),
+              Text(
+                timeago.format(log.timestamp),
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
-          _Chip(
-            label: log.portfolioHealth,
-            color: _healthColor(log.portfolioHealth),
-            prefix: '💼 ',
-          ),
-          if (isSwing) ...[
-            const SizedBox(width: 10),
-            _Chip(
-              label: 'WEB SEARCH',
-              color: const Color(0xFF7C4DFF),
-              prefix: '🔍 ',
+          // Global market breakdown (open + bullish)
+          if (log.isGlobal) ...[
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  if (log.openMarkets.isNotEmpty) ...[
+                    Text(
+                      'Open: ',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+                    ),
+                    ...log.openMarkets.map((m) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        _marketFlag(m),
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    )),
+                    const SizedBox(width: 12),
+                  ],
+                  if (log.bullishMarkets.isNotEmpty) ...[
+                    Text(
+                      '📈 Bullish: ',
+                      style: TextStyle(color: const Color(0xFF00C853).withOpacity(0.8), fontSize: 10),
+                    ),
+                    ...log.bullishMarkets.map((m) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        '${_marketFlag(m)} $m',
+                        style: const TextStyle(
+                          color: Color(0xFF00C853),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    )),
+                  ],
+                  if (log.chosenMarket.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF7C4DFF).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF7C4DFF).withOpacity(0.4)),
+                      ),
+                      child: Text(
+                        '🎯 ${_marketFlag(log.chosenMarket)} ${log.chosenMarket}',
+                        style: const TextStyle(
+                          color: Color(0xFF7C4DFF),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
-          const Spacer(),
-          Text(
-            timeago.format(log.timestamp),
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
-          ),
         ],
       ),
     );
@@ -455,19 +529,21 @@ class _LogEntry extends StatelessWidget {
 
   Color _statusColor(String s, bool swing) {
     switch (s) {
-      case 'TRADED':       return const Color(0xFF00C853);
-      case 'ANALYSING':    return swing ? const Color(0xFF7C4DFF) : const Color(0xFF607D8B);
-      case 'MARKET_CLOSED':return const Color(0xFF607D8B);
-      default:             return const Color(0xFFFFA726);
+      case 'TRADED':             return const Color(0xFF00C853);
+      case 'ANALYSING':          return swing ? const Color(0xFF7C4DFF) : const Color(0xFF607D8B);
+      case 'MARKET_CLOSED':      return const Color(0xFF607D8B);
+      case 'ALL_MARKETS_CLOSED': return const Color(0xFF607D8B);
+      default:                   return const Color(0xFFFFA726);
     }
   }
 
   String _statusIcon(String s, bool swing) {
     switch (s) {
-      case 'TRADED':        return '⚡';
-      case 'ANALYSING':     return '🔍';
-      case 'MARKET_CLOSED': return '🌙';
-      default:              return swing ? '📊' : '👁';
+      case 'TRADED':             return '⚡';
+      case 'ANALYSING':          return '🔍';
+      case 'MARKET_CLOSED':      return '🌙';
+      case 'ALL_MARKETS_CLOSED': return '🌙';
+      default:                   return swing ? '📊' : '👁';
     }
   }
 
@@ -481,10 +557,19 @@ class _LogEntry extends StatelessWidget {
     if (thought.contains('✗') || thought.contains('skip') || thought.contains('error')) {
       return const Color(0xFFEF5350).withOpacity(0.8);
     }
-    if (thought.contains('Search') || thought.contains('search') || thought.contains('news') || thought.contains('web')) {
-      return isSwing ? const Color(0xFF7C4DFF).withOpacity(0.9) : const Color(0xFF1D6FEB).withOpacity(0.9);
+    if (thought.contains('BULLISH') || thought.contains('bullish')) {
+      return const Color(0xFF00C853).withOpacity(0.9);
     }
-    if (thought.contains('Scanning') || thought.contains('Checking')) {
+    if (thought.contains('BEARISH') || thought.contains('bearish')) {
+      return const Color(0xFFFF3B30).withOpacity(0.9);
+    }
+    if (thought.contains('Scanning') || thought.contains('Checking') || thought.contains('EODHD')) {
+      return const Color(0xFF00BCD4).withOpacity(0.9);
+    }
+    if (thought.contains('India') || thought.contains('NSE')) {
+      return const Color(0xFFFF9800).withOpacity(0.9);
+    }
+    if (thought.contains('USA') || thought.contains('US market')) {
       return const Color(0xFF1D6FEB).withOpacity(0.9);
     }
     return Colors.grey.shade400;
@@ -526,18 +611,18 @@ class _EmptyBrain extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isSwing = mode == 'swing';
+    final isGlobal = mode == 'global';
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
-            isSwing ? '📈' : '🧠',
+            isGlobal ? '🌐' : '🧠',
             style: const TextStyle(fontSize: 56),
           ),
           const SizedBox(height: 20),
           Text(
-            isSwing ? 'Swing engine awakening...' : 'ARJUN is awakening...',
+            isGlobal ? 'Global engine awakening...' : 'ARJUN is awakening...',
             style: GoogleFonts.jetBrainsMono(
               color: Colors.white70,
               fontSize: 16,
@@ -546,10 +631,11 @@ class _EmptyBrain extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            isSwing
-                ? 'First hourly swing cycle logs will appear here'
+            isGlobal
+                ? 'Scanning 🇮🇳 🇺🇸 🇩🇪 🇯🇵 markets...\nFirst hourly logs will appear here'
                 : 'First trading cycle logs will appear here',
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

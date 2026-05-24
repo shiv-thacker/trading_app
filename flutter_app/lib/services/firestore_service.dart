@@ -11,14 +11,16 @@
 ///     - Cloud Function invocations (manual trigger, reset)
 ///
 /// STREAMS (real-time, updates UI instantly when ARJUN trades):
-///   portfolioStream()     → portfolio/state document
-///   tradesStream()        → trades collection, newest first
-///   aiLogsStream()        → ai_logs collection, last 50, newest first
-///   snapshotsStream()     → portfolio/state/snapshots sub-collection
+///   portfolioStream()              → portfolio/state (intraday)
+///   swingPortfolioStream()         → swing_portfolio/state (India swing)
+///   globalSwingPortfolioStream()   → global_swing_portfolio/state (multi-market)
+///   globalSwingTradesStream()      → global_swing_trades
+///   globalSwingAiLogsStream()      → global_swing_ai_logs
+///   globalSwingSnapshotsStream()   → global_swing_portfolio/state/snapshots
 ///
 /// CLOUD FUNCTION CALLS:
-///   triggerManualCycle()  → calls manualTrigger Cloud Function
-///   resetPortfolio()      → calls resetPortfolio Cloud Function
+///   triggerManualGlobalSwingCycle() → manualGlobalSwingTrigger
+///   resetGlobalPortfolio()          → resetGlobalPortfolio
 ///
 /// USAGE (with Riverpod):
 ///   The service is exposed as a Riverpod provider.
@@ -337,6 +339,118 @@ class FirestoreService {
   Future<Map<String, dynamic>> resetSwingPortfolio() async {
     try {
       final callable = _functions.httpsCallable('resetSwingPortfolio');
+      final result = await callable.call();
+      return Map<String, dynamic>.from(result.data as Map);
+    } on FirebaseFunctionsException catch (e) {
+      return {'success': false, 'error': e.message};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GLOBAL SWING — Multi-market (India + US + Germany + Japan)
+  // Collections: global_swing_portfolio, global_swing_trades, global_swing_ai_logs
+  // ══════════════════════════════════════════════════════════
+
+  /// Real-time stream of the global_swing_portfolio/state document.
+  /// Supports multi-currency: inrCash + usdCash + totalValueINR.
+  Stream<Portfolio> globalSwingPortfolioStream() {
+    return _db
+        .collection('global_swing_portfolio')
+        .doc('state')
+        .snapshots()
+        .map((snap) {
+          if (!snap.exists) return Portfolio.emptyGlobal();
+          return Portfolio.fromFirestore(snap);
+        });
+  }
+
+  /// Real-time stream of global swing trade history.
+  /// [filter] can be null (all), "BUY", or "SELL".
+  Stream<List<Trade>> globalSwingTradesStream({String? filter}) {
+    Query<Map<String, dynamic>> query = _db
+        .collection('global_swing_trades')
+        .orderBy('timestampMs', descending: true)
+        .limit(100);
+
+    if (filter != null && filter.isNotEmpty) {
+      query = query.where('action', isEqualTo: filter);
+    }
+
+    return query.snapshots().map(
+      (snap) => snap.docs.map(Trade.fromFirestore).toList(),
+    );
+  }
+
+  /// Real-time stream of global swing AI hourly logs (last 30).
+  Stream<List<AILog>> globalSwingAiLogsStream() {
+    return _db
+        .collection('global_swing_ai_logs')
+        .orderBy('timestampMs', descending: true)
+        .limit(30)
+        .snapshots()
+        .map(
+          (snap) => snap.docs.map(AILog.fromFirestore).toList(),
+        );
+  }
+
+  /// Real-time stream of global swing portfolio value snapshots (hourly).
+  Stream<List<Snapshot>> globalSwingSnapshotsStream() {
+    return _db
+        .collection('global_swing_portfolio')
+        .doc('state')
+        .collection('snapshots')
+        .orderBy('timestampMs', descending: false)
+        .limit(200)
+        .snapshots()
+        .map(
+          (snap) => snap.docs.map(Snapshot.fromFirestore).toList(),
+        );
+  }
+
+  /// Total realized P&L (in INR) from all global swing SELL trades.
+  Future<double> getGlobalSwingRealizedPnL() async {
+    try {
+      final snap = await _db
+          .collection('global_swing_trades')
+          .where('action', isEqualTo: 'SELL')
+          .get();
+
+      double total = 0;
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        // Use pnlINR for foreign trades; pnl for INR trades
+        final currency = d['currency'] as String? ?? 'INR';
+        if (currency == 'INR') {
+          total += (d['pnl'] as num?)?.toDouble() ?? 0;
+        } else {
+          total += (d['pnlINR'] as num?)?.toDouble() ?? 0;
+        }
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Manually trigger one global swing trading cycle (for testing).
+  Future<Map<String, dynamic>> triggerManualGlobalSwingCycle() async {
+    try {
+      final callable = _functions.httpsCallable('manualGlobalSwingTrigger');
+      final result = await callable.call();
+      return Map<String, dynamic>.from(result.data as Map);
+    } on FirebaseFunctionsException catch (e) {
+      return {'success': false, 'error': e.message};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Reset global portfolio to ₹50,000 INR + \$600 USD.
+  Future<Map<String, dynamic>> resetGlobalPortfolio() async {
+    try {
+      final callable = _functions.httpsCallable('resetGlobalPortfolio');
       final result = await callable.call();
       return Map<String, dynamic>.from(result.data as Map);
     } on FirebaseFunctionsException catch (e) {

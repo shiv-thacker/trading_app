@@ -1,21 +1,16 @@
 /// widgets/trade_card.dart
 /// ========================
 /// Displays a single executed trade in the History screen.
+/// Supports both India-only and multi-market global trades.
 ///
 /// LAYOUT:
-///   ┌─────────────────────────────────────────┐
-///   │ [BUY] RELIANCE · Reliance Industries    │
-///   │        2 minutes ago                    │
-///   │ ₹2,847.50 × 10 shares = ₹28,475.00     │
-///   │ P&L: +₹1,234.50 (+4.34%)  [SELL only]  │
-///   │ "ARJUN's reasoning paragraph..."        │
-///   │ [MOMENTUM] [HIGH confidence]            │
-///   └─────────────────────────────────────────┘
-///
-/// Color coding:
-///   BUY  badge → blue
-///   SELL badge → green (profit) or red (loss)
-///   P&L        → green positive, red negative
+///   ┌──────────────────────────────────────────────┐
+///   │ [BUY] 🇺🇸 AAPL.US · Apple Inc        2h ago │
+///   │ $182.50 × 5 shares = $912.50 [US] [HIGH]    │
+///   │ P&L: +$18.25 (+2.0%) = +₹1,520 INR [SELL]  │
+///   │ "ARJUN's reasoning..."                       │
+///   │ [MOMENTUM] [HIGH] [USA]                      │
+///   └──────────────────────────────────────────────┘
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -30,10 +25,9 @@ class TradeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isBuy  = trade.action == 'BUY';
-    final isSell = trade.action == 'SELL';
+    final isBuy     = trade.action == 'BUY';
+    final isSell    = trade.action == 'SELL';
     final hasProfit = isSell && trade.pnl >= 0;
-    final hasLoss   = isSell && trade.pnl < 0;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -66,7 +60,16 @@ class TradeCard extends StatelessWidget {
                           ? const Color(0xFF00C853)
                           : const Color(0xFFFF3B30),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+
+                // Country flag (for global trades)
+                if (trade.isForeign) ...[
+                  Text(
+                    trade.countryFlag,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(width: 6),
+                ],
 
                 // Symbol + company
                 Expanded(
@@ -81,14 +84,15 @@ class TradeCard extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      Text(
-                        trade.companyName,
-                        style: TextStyle(
-                          color: Colors.grey.shade500,
-                          fontSize: 11,
+                      if (trade.companyName.isNotEmpty)
+                        Text(
+                          trade.companyName,
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 11,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
                     ],
                   ),
                 ),
@@ -111,13 +115,22 @@ class TradeCard extends StatelessWidget {
             // ── Price row ────────────────────────────────────
             Row(
               children: [
-                Text(
-                  '₹${_fmt(trade.price)} × ${trade.quantity} shares = ₹${_fmt(trade.totalAmount)}',
-                  style: GoogleFonts.jetBrainsMono(
-                    color: Colors.white70,
-                    fontSize: 12,
+                Expanded(
+                  child: Text(
+                    '${trade.currencySymbol}${_fmt(trade.price)} × ${trade.quantity} shares = ${trade.currencySymbol}${_fmt(trade.totalAmount)}',
+                    style: GoogleFonts.jetBrainsMono(
+                      color: Colors.white70,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
+                // Market badge (foreign trades)
+                if (trade.isForeign)
+                  _Badge(
+                    label: trade.market,
+                    color: const Color(0xFF00BCD4),
+                    small: true,
+                  ),
               ],
             ),
 
@@ -128,10 +141,7 @@ class TradeCard extends StatelessWidget {
                 children: [
                   Text(
                     'P&L: ',
-                    style: TextStyle(
-                      color: Colors.grey.shade500,
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
                   ),
                   Text(
                     trade.pnlFormatted,
@@ -153,6 +163,17 @@ class TradeCard extends StatelessWidget {
                       fontSize: 12,
                     ),
                   ),
+                  // Show INR equivalent for foreign trades
+                  if (trade.isForeign && trade.pnlINR != 0) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '≈ ${trade.pnlINR >= 0 ? '+' : ''}₹${trade.pnlINR.abs().toStringAsFixed(0)} INR',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ],
@@ -207,14 +228,18 @@ class TradeCard extends StatelessWidget {
                   color: _confidenceColor(trade.confidence),
                   small: true,
                 ),
+                if (trade.isForeign) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '${trade.countryFlag} ${trade.country}',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+                  ),
+                ],
                 const Spacer(),
                 if (trade.sector.isNotEmpty)
                   Text(
                     trade.sector,
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 10,
-                    ),
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
                   ),
               ],
             ),

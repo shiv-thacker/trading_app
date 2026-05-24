@@ -9,20 +9,18 @@
  *   global_swing_trades                  ← One doc per executed trade (all markets)
  *   global_swing_ai_logs                 ← One doc per cycle decision
  *
- * MULTI-CURRENCY DESIGN:
- *   inrCash : ₹ — used for India (NSE) trades
- *   usdCash : $ — used for ALL foreign trades (US, Germany, Japan)
+ * UNIFIED CAPITAL DESIGN:
+ *   capitalINR : single pool of money in ₹ — used for ALL markets.
  *
- *   Why USD for Germany/Japan paper trades?
- *     - Germany trades are in EUR, Japan in JPY, but for paper simulation
- *       we track them in USD (approximate). IBKR handles the real FX on live.
- *     - This keeps portfolio math simple: just 2 wallets instead of 4.
+ *   When buying India stock  : deduct ₹amount directly from capitalINR.
+ *   When buying US/DE/JP stock: deduct (USD_price × qty × usdInrRate) from capitalINR.
+ *   When selling any stock   : add proceeds converted back to ₹ at live rate.
  *
- * CAPITAL RECOMMENDATION (set this once in Firestore manually, or let
- * the system auto-init with DEFAULT_PORTFOLIO below):
- *   inrCash: 50000  (₹50,000 for India trades)
- *   usdCash: 600    ($600 ≈ ₹50,000 at ₹83.5/$ for foreign trades)
- *   Total:   ₹1,00,000
+ *   This means ARJUN decides how much of the ₹1,00,000 to put in which
+ *   country each cycle — no pre-assigned per-country wallet.
+ *
+ * CAPITAL RECOMMENDATION:
+ *   capitalINR: 100000  (₹1,00,000 total — invest wherever is most bullish)
  *
  * IBKR MIGRATION:
  *   For live trading, portfolio state (cash, holdings) would be read
@@ -39,14 +37,13 @@ function db() { return admin.firestore(); }
 // ── Default starting portfolio (used when Firestore doc doesn't exist yet) ──
 const DEFAULT_PORTFOLIO = {
   baseCurrency:      "INR",
-  startingCapital:   100000,  // ₹1,00,000 total recommended capital
-  inrCash:           50000,   // ₹50,000 for India (NSE) trades
-  usdCash:           600.00,  // $600 for US + Germany + Japan trades
-  usdInrRate:        83.5,    // Updated each cycle via EODHD FOREX endpoint
-  totalValueINR:     100000,  // Recalculated every cycle
+  startingCapital:   100000,   // ₹1,00,000 total capital
+  capitalINR:        100000,   // Available cash in ₹ (unified pool — all markets)
+  usdInrRate:        84.0,     // Live USD/INR rate — updated each cycle from EODHD
+  totalValueINR:     100000,   // capitalINR + all open positions (recalculated every cycle)
   holdings:          [],
-  recentSells:       [],      // Tracks recently sold symbols (for NO_REBUY_DAYS rule)
-  lastDaysHeldDate:  null,    // Used to increment daysHeld once per calendar day
+  recentSells:       [],       // Tracks recently sold symbols (for NO_REBUY_DAYS rule)
+  lastDaysHeldDate:  null,     // Used to increment daysHeld once per calendar day
   lastUpdated:       null,
 };
 
@@ -57,9 +54,50 @@ const DEFAULT_PORTFOLIO = {
 /**
  * Read the current portfolio state from Firestore.
  * Returns DEFAULT_PORTFOLIO if no document exists yet (first run).
+ * Migrates legacy cash / dual-wallet fields on read.
  *
  * @returns {Promise<Object>} Portfolio state object
  */
+/**
+ * Normalize any legacy portfolio format into the unified capitalINR model.
+ * Handles old docs that still have cash: 10000, inrCash/usdCash split wallets, etc.
+ */
+function normalizePortfolio(data) {
+  const starting  = data.startingCapital || 100000;
+  const rate      = data.usdInrRate || 84.0;
+  const legacyCash = data.cash || 0;
+
+  // Build unified capitalINR from whatever fields exist
+  if (!data.capitalINR || data.capitalINR <= 0) {
+    if (data.inrCash > 0 || data.usdCash > 0) {
+      data.capitalINR = (data.inrCash || 0) + (data.usdCash || 0) * rate;
+    } else if (legacyCash > 0 && legacyCash < starting * 0.5 && starting >= 50000) {
+      // Stale ₹10k cash field with ₹1L starting capital — ignore legacy cash
+      data.capitalINR = starting;
+    } else if (legacyCash > 0) {
+      data.capitalINR = legacyCash;
+    } else {
+      data.capitalINR = starting;
+    }
+  }
+
+  if (!Array.isArray(data.holdings))    data.holdings    = [];
+  if (!Array.isArray(data.recentSells)) data.recentSells = [];
+
+  data.baseCurrency    = data.baseCurrency || "INR";
+  data.startingCapital = starting;
+  data.usdInrRate      = rate;
+  data.totalValueINR   = calcTotalValueINR(data);
+
+  // Drop legacy fields so they never get re-saved
+  delete data.cash;
+  delete data.totalValue;
+  delete data.inrCash;
+  delete data.usdCash;
+
+  return data;
+}
+
 async function getPortfolioState() {
   try {
     const doc = await db().collection("global_swing_portfolio").doc("state").get();
@@ -69,10 +107,7 @@ async function getPortfolioState() {
       return { ...DEFAULT_PORTFOLIO, lastUpdated: Date.now() };
     }
 
-    const data = doc.data();
-    if (!Array.isArray(data.holdings))    data.holdings    = [];
-    if (!Array.isArray(data.recentSells)) data.recentSells = [];
-    return data;
+    return normalizePortfolio(doc.data());
 
   } catch (err) {
     logger.error("getPortfolioState failed:", err.message);
@@ -92,18 +127,27 @@ async function getPortfolioState() {
  */
 async function savePortfolioState(state) {
   try {
+  // Write only the canonical fields — never spread stale legacy keys (cash, inrCash, etc.)
+    const clean = normalizePortfolio({ ...state });
     await db()
       .collection("global_swing_portfolio")
       .doc("state")
       .set({
-        ...state,
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        baseCurrency:     clean.baseCurrency,
+        startingCapital:  clean.startingCapital,
+        capitalINR:       clean.capitalINR,
+        usdInrRate:       clean.usdInrRate,
+        totalValueINR:    clean.totalValueINR,
+        holdings:         clean.holdings,
+        recentSells:      clean.recentSells || [],
+        lastDaysHeldDate: clean.lastDaysHeldDate || null,
+        lastUpdated:      admin.firestore.FieldValue.serverTimestamp(),
       });
 
     logger.info(
-      `Portfolio saved — INR: ₹${state.inrCash?.toFixed(0)}, ` +
-      `USD: $${state.usdCash?.toFixed(2)}, ` +
-      `Total: ₹${state.totalValueINR?.toFixed(0)}, ` +
+      `Portfolio saved — Capital: ₹${(state.capitalINR || 0).toFixed(0)}, ` +
+      `Total: ₹${(state.totalValueINR || 0).toFixed(0)}, ` +
+      `Rate: ₹${(state.usdInrRate || 84).toFixed(2)}/$, ` +
       `Holdings: ${state.holdings?.length}`
     );
   } catch (err) {
@@ -138,9 +182,8 @@ async function recordSnapshot(portfolio) {
         timestamp:     admin.firestore.FieldValue.serverTimestamp(),
         timestampMs:   Date.now(),
         totalValueINR: portfolio.totalValueINR || 0,
-        inrCash:       portfolio.inrCash       || 0,
-        usdCash:       portfolio.usdCash       || 0,
-        usdInrRate:    portfolio.usdInrRate     || 83.5,
+        capitalINR:    portfolio.capitalINR    || 0,
+        usdInrRate:    portfolio.usdInrRate    || 84.0,
         holdingsCount: (portfolio.holdings || []).length,
         pnlTotal,
         pnlPct,
@@ -244,7 +287,7 @@ async function recordAILog(logData) {
  * @param {number} usdInrRate  - Current exchange rate for conversion
  * @returns {Array}            - Updated holdings array
  */
-function updateHoldingsPnL(holdings, priceMap, usdInrRate = 83.5) {
+function updateHoldingsPnL(holdings, priceMap, usdInrRate = 84.0) {
   if (!holdings || holdings.length === 0) return [];
   if (!priceMap || Object.keys(priceMap).length === 0) return holdings;
 
@@ -270,15 +313,15 @@ function updateHoldingsPnL(holdings, priceMap, usdInrRate = 83.5) {
 
 /**
  * Recalculate total portfolio value in INR.
- * Includes: INR cash + (USD cash × rate) + all position values.
+ * Includes: available capitalINR + all open position values converted to INR.
  *
  * @param {Object} portfolio - Portfolio state with updated holdings
  * @returns {number}         - Total value in INR
  */
 function calcTotalValueINR(portfolio) {
-  const { inrCash = 0, usdCash = 0, usdInrRate = 83.5, holdings = [] } = portfolio;
+  const { capitalINR = 0, usdInrRate = 84.0, holdings = [] } = portfolio;
 
-  let total = inrCash + usdCash * usdInrRate;
+  let total = capitalINR;
 
   for (const h of holdings) {
     const posValue = (h.currentPrice || h.avgBuyPrice) * h.quantity;

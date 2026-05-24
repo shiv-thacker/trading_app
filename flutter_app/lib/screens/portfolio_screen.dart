@@ -31,15 +31,15 @@ final realizedPnlProvider = FutureProvider<double>((ref) {
 });
 
 final swingPortfolioProvider = StreamProvider<Portfolio>((ref) {
-  return ref.read(firestoreServiceProvider).swingPortfolioStream();
+  return ref.read(firestoreServiceProvider).globalSwingPortfolioStream();
 });
 
 final swingSnapshotsProvider = StreamProvider<List<Snapshot>>((ref) {
-  return ref.read(firestoreServiceProvider).swingSnapshotsStream();
+  return ref.read(firestoreServiceProvider).globalSwingSnapshotsStream();
 });
 
 final swingRealizedPnlProvider = FutureProvider<double>((ref) {
-  return ref.read(firestoreServiceProvider).getSwingRealizedPnL();
+  return ref.read(firestoreServiceProvider).getGlobalSwingRealizedPnL();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ class PortfolioScreen extends StatelessWidget {
                 unselectedLabelStyle: GoogleFonts.jetBrainsMono(fontSize: 11),
                 tabs: const [
                   // Tab(text: '⚡  INTRADAY'), // intraday disabled
-                  Tab(text: '📈  SWING'),
+                  Tab(text: '🌐  GLOBAL'),
                 ],
               ),
             ),
@@ -137,7 +137,7 @@ class _SwingPortfolioTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final portfolio   = ref.watch(swingPortfolioProvider).valueOrNull ?? Portfolio.empty();
+    final portfolio   = ref.watch(swingPortfolioProvider).valueOrNull ?? Portfolio.emptyGlobal();
     final snapshots   = ref.watch(swingSnapshotsProvider).valueOrNull ?? [];
     final realizedPnl = ref.watch(swingRealizedPnlProvider).valueOrNull ?? 0;
 
@@ -284,7 +284,7 @@ class _ModeBanner extends StatelessWidget {
           Expanded(
             child: Text(
               isSwing
-                  ? 'Swing portfolio — multi-day positions, web search powered'
+                  ? 'Global portfolio — 🇮🇳 India · 🇺🇸 USA · 🇩🇪 Germany · 🇯🇵 Japan · EODHD powered'
                   : 'Intraday portfolio — same-day positions, 5-min cycles',
               style: TextStyle(
                 color: Colors.grey.shade400,
@@ -312,6 +312,8 @@ class _StatsSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final unrealized = portfolio.unrealizedPnlTotal;
     final totalPnl   = portfolio.totalPnl;
+    final displayValue = portfolio.displayValueINR;
+    final showWallets  = portfolio.usesGlobalWallets;
 
     return Container(
       margin: const EdgeInsets.all(16),
@@ -324,15 +326,19 @@ class _StatsSummary extends StatelessWidget {
       child: Column(
         children: [
           _StatRow('Starting Capital', portfolio.startingCapital),
-          _StatRow('Current Value',    portfolio.totalValue,
+          _StatRow('Current Value (INR)', displayValue,
               highlight: true, isProfit: portfolio.isProfit),
           const Divider(color: Color(0x14FFFFFF), height: 20),
-          _StatRow('Realized P&L',  realizedPnl,  showSign: true),
-          _StatRow('Unrealized P&L', unrealized,   showSign: true),
-          _StatRow('Total P&L',      totalPnl,     showSign: true, bold: true),
+          _StatRow('Realized P&L',   realizedPnl, showSign: true),
+          _StatRow('Unrealized P&L', unrealized,  showSign: true),
+          _StatRow('Total P&L',      totalPnl,    showSign: true, bold: true),
           const Divider(color: Color(0x14FFFFFF), height: 20),
-          _StatRow('Available Cash', portfolio.cash),
-          _StatRow('Invested',       portfolio.totalValue - portfolio.cash),
+          if (showWallets) ...[
+            _StatRow('Available Capital', portfolio.availableCashINR, bold: true),
+            _StatRow('  USD/INR rate', portfolio.usdInrRate, isRate: true),
+          ] else
+            _StatRow('Available Cash', portfolio.cash),
+          _StatRow('Invested in stocks', portfolio.investedValueINR),
         ],
       ),
     );
@@ -346,12 +352,16 @@ class _StatRow extends StatelessWidget {
   final bool? isProfit;
   final bool showSign;
   final bool bold;
+  final bool isForeign; // USD value
+  final bool isRate;    // Exchange rate — show as "₹84.20/$"
 
   const _StatRow(this.label, this.value, {
     this.highlight = false,
     this.isProfit,
     this.showSign = false,
     this.bold = false,
+    this.isForeign = false,
+    this.isRate = false,
   });
 
   @override
@@ -363,8 +373,14 @@ class _StatRow extends StatelessWidget {
       color = value >= 0 ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
     }
 
-    final prefix = showSign && value >= 0 ? '+' : '';
-    final fmt    = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+    final prefix    = showSign && value >= 0 ? '+' : '';
+    final inrFmt    = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+    final usdFmt    = NumberFormat.currency(locale: 'en_US', symbol: '\$', decimalDigits: 2);
+    final formatted = isRate
+        ? '₹${value.toStringAsFixed(2)}/\$'
+        : isForeign
+            ? '$prefix${usdFmt.format(value)}'
+            : '$prefix${inrFmt.format(value)}';
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -373,7 +389,7 @@ class _StatRow extends StatelessWidget {
         children: [
           Text(label, style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
           Text(
-            '$prefix${fmt.format(value)}',
+            formatted,
             style: GoogleFonts.jetBrainsMono(
               color: color,
               fontSize: 13,
@@ -426,10 +442,15 @@ class _AllocationPieChartState extends State<_AllocationPieChart> {
       value: '${cashPct.toStringAsFixed(1)}%',
     ));
 
+    final totalForPct = portfolio.displayValueINR;
+    final fxRate = portfolio.usdInrRate > 0 ? portfolio.usdInrRate : 83.5;
     for (int i = 0; i < portfolio.holdings.length; i++) {
       final h   = portfolio.holdings[i];
-      final pct = portfolio.totalValue > 0
-          ? (h.currentValue / portfolio.totalValue * 100)
+      final hValueINR = h.currency == 'INR'
+          ? h.currentValue
+          : h.currentValue * fxRate;
+      final pct = totalForPct > 0
+          ? (hValueINR / totalForPct * 100)
           : 0.0;
       final color = _palette[i % (_palette.length - 1)];
       sections.add(PieChartSectionData(
@@ -539,16 +560,21 @@ class _HoldingDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isProfit = holding.isProfit;
-    final pnlColor = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+    final isProfit   = holding.isProfit;
+    final pnlColor   = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+    final isForeign  = holding.isForeign;
+    final sym        = isForeign
+        ? (holding.currency == 'USD' ? '\$'
+            : holding.currency == 'EUR' ? '€'
+            : holding.currency == 'JPY' ? '¥' : '₹')
+        : '₹';
 
     final range    = holding.target - holding.stopLoss;
     final progress = range > 0
         ? ((holding.currentPrice - holding.stopLoss) / range).clamp(0.0, 1.0)
         : 0.5;
 
-    // Duration label: intraday uses minutes, swing uses days
-    final durationLabel = isSwing
+    final durationLabel = isSwing || isForeign
         ? '${holding.daysHeld} day${holding.daysHeld != 1 ? 's' : ''} held'
         : '${holding.minutesHeld} min held';
 
@@ -566,6 +592,10 @@ class _HoldingDetail extends StatelessWidget {
           // Symbol + P&L
           Row(
             children: [
+              if (isForeign) ...[
+                Text(holding.countryFlag, style: const TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+              ],
               Text(
                 holding.symbol,
                 style: GoogleFonts.jetBrainsMono(
@@ -575,23 +605,21 @@ class _HoldingDetail extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                holding.sector,
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
-              ),
+              if (holding.sector.isNotEmpty)
+                Text(holding.sector, style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
               if (isSwing) ...[
                 const SizedBox(width: 6),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF7C4DFF).withOpacity(0.1),
+                    color: const Color(0xFF00C853).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(3),
-                    border: Border.all(color: const Color(0xFF7C4DFF).withOpacity(0.3)),
+                    border: Border.all(color: const Color(0xFF00C853).withOpacity(0.3)),
                   ),
                   child: Text(
-                    'SWING',
+                    isForeign ? holding.market : 'NSE',
                     style: GoogleFonts.jetBrainsMono(
-                      color: const Color(0xFF7C4DFF),
+                      color: const Color(0xFF00C853),
                       fontSize: 8,
                       fontWeight: FontWeight.bold,
                     ),
@@ -611,12 +639,20 @@ class _HoldingDetail extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '${holding.quantity} shares @ avg ₹${holding.avgBuyPrice.toStringAsFixed(2)} → now ₹${holding.currentPrice.toStringAsFixed(2)}',
+            '${holding.quantity} shares @ avg $sym${holding.avgBuyPrice.toStringAsFixed(2)} → now $sym${holding.currentPrice.toStringAsFixed(2)}',
             style: GoogleFonts.jetBrainsMono(
               color: Colors.grey.shade400,
               fontSize: 11,
             ),
           ),
+          // INR equivalent for foreign holdings
+          if (isForeign && holding.pnlInINR != 0) ...[
+            const SizedBox(height: 2),
+            Text(
+              '≈ ${isProfit ? '+' : ''}₹${holding.pnlInINR.abs().toStringAsFixed(0)} unrealized INR',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+            ),
+          ],
 
           const SizedBox(height: 12),
 
@@ -627,9 +663,9 @@ class _HoldingDetail extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('SL ₹${holding.stopLoss.toStringAsFixed(1)}',
+                  Text('SL $sym${holding.stopLoss.toStringAsFixed(1)}',
                       style: TextStyle(color: const Color(0xFFFF3B30).withOpacity(0.7), fontSize: 9)),
-                  Text('TGT ₹${holding.target.toStringAsFixed(1)}',
+                  Text('TGT $sym${holding.target.toStringAsFixed(1)}',
                       style: TextStyle(color: const Color(0xFF00C853).withOpacity(0.7), fontSize: 9)),
                 ],
               ),
@@ -666,7 +702,7 @@ class _HoldingDetail extends StatelessWidget {
 
           const SizedBox(height: 8),
           Text(
-            'Value: ₹${(holding.currentPrice * holding.quantity).toStringAsFixed(2)} · $durationLabel',
+            'Value: $sym${(holding.currentPrice * holding.quantity).toStringAsFixed(2)} · $durationLabel',
             style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
           ),
         ],

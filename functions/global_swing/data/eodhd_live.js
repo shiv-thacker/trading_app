@@ -22,7 +22,45 @@
 const { eohdGet } = require("./eodhd_client");
 const logger      = require("firebase-functions/logger");
 
-const LIVE_TTL = 5 * 60 * 1000;  // 5-minute cache
+const LIVE_TTL = 5 * 60 * 1000;   // 5-minute cache
+const FX_TTL   = 60 * 60 * 1000;  // 60-minute cache for FX rates (changes slowly)
+
+// ─────────────────────────────────────────────────────────────
+// Live FX rate fetcher
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Fetch live USD/INR exchange rate from EODHD FOREX endpoint.
+ * Falls back to a safe default if the API call fails.
+ *
+ * EODHD FOREX symbol format: "USDINR.FOREX"
+ * Returns the current bid/ask mid price.
+ *
+ * @returns {Promise<number>} e.g. 84.21
+ */
+async function getLiveUsdInrRate() {
+  try {
+    const data = await eohdGet(
+      "/real-time/USDINR.FOREX",
+      {},
+      "fx_usdinr",
+      FX_TTL
+    );
+
+    if (data && (data.close || data.price)) {
+      const rate = parseFloat(data.close || data.price);
+      if (rate > 50 && rate < 150) {   // sanity check — ₹50–₹150 per $
+        logger.info(`Live USD/INR rate: ₹${rate.toFixed(2)}`);
+        return Math.round(rate * 100) / 100;
+      }
+    }
+  } catch (err) {
+    logger.warn("USD/INR rate fetch failed — using default 84.0:", err.message);
+  }
+
+  // Safe fallback (close to real rate, avoids startup errors)
+  return 84.0;
+}
 
 /**
  * Fetch live quotes for a batch of EODHD symbols.
@@ -122,4 +160,4 @@ async function getTopMovers(watchlist, minChangePct = 1.0, topN = 10) {
   return movers;
 }
 
-module.exports = { getLiveQuotes, getLiveIndex, getTopMovers };
+module.exports = { getLiveQuotes, getLiveIndex, getTopMovers, getLiveUsdInrRate };

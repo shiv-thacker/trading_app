@@ -48,7 +48,7 @@ final snapshotsProvider = StreamProvider<List<Snapshot>>((ref) {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Riverpod stream providers — Swing
+// Riverpod stream providers — Swing (India-only, kept for reference)
 // ─────────────────────────────────────────────────────────────
 
 final swingPortfolioDashProvider = StreamProvider<Portfolio>((ref) {
@@ -57,6 +57,18 @@ final swingPortfolioDashProvider = StreamProvider<Portfolio>((ref) {
 
 final swingAiLogsDashProvider = StreamProvider<List<AILog>>((ref) {
   return ref.read(firestoreServiceProvider).swingAiLogsStream();
+});
+
+// ─────────────────────────────────────────────────────────────
+// Riverpod stream providers — Global Swing (multi-market, primary)
+// ─────────────────────────────────────────────────────────────
+
+final globalSwingPortfolioDashProvider = StreamProvider<Portfolio>((ref) {
+  return ref.read(firestoreServiceProvider).globalSwingPortfolioStream();
+});
+
+final globalSwingAiLogsDashProvider = StreamProvider<List<AILog>>((ref) {
+  return ref.read(firestoreServiceProvider).globalSwingAiLogsStream();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -70,11 +82,11 @@ class DashboardScreen extends ConsumerWidget {
     // final portfolioAsync  = ref.watch(portfolioProvider);  // intraday — not used in dashboard
     // final logsAsync       = ref.watch(aiLogsProvider);     // intraday — not used in dashboard
     // final snapshotsAsync  = ref.watch(snapshotsProvider);  // intraday — not used in dashboard
-    final swingPortfolioAsync = ref.watch(swingPortfolioDashProvider);
-    final swingLogsAsync      = ref.watch(swingAiLogsDashProvider);
+    final swingPortfolioAsync = ref.watch(globalSwingPortfolioDashProvider);
+    final swingLogsAsync      = ref.watch(globalSwingAiLogsDashProvider);
 
     final latestSwingLog  = swingLogsAsync.valueOrNull?.firstOrNull;
-    final swingPortfolio  = swingPortfolioAsync.valueOrNull ?? Portfolio.empty();
+    final swingPortfolio  = swingPortfolioAsync.valueOrNull ?? Portfolio.emptyGlobal();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -85,8 +97,8 @@ class DashboardScreen extends ConsumerWidget {
           // ref.invalidate(portfolioProvider);   // intraday — disabled
           // ref.invalidate(aiLogsProvider);      // intraday — disabled
           // ref.invalidate(snapshotsProvider);   // intraday — disabled
-          ref.invalidate(swingPortfolioDashProvider);
-          ref.invalidate(swingAiLogsDashProvider);
+          ref.invalidate(globalSwingPortfolioDashProvider);
+          ref.invalidate(globalSwingAiLogsDashProvider);
         },
         child: CustomScrollView(
           slivers: [
@@ -223,30 +235,55 @@ class _PortfolioValueSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pnlTotal   = portfolio.totalPnl;
-    final pnlPct     = portfolio.totalPnlPct;
-    final isProfit   = pnlTotal >= 0;
-    final pnlColor   = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
-    final pnlIcon    = isProfit ? '▲' : '▼';
+    final pnlTotal = portfolio.totalPnl;
+    final pnlPct   = portfolio.totalPnlPct;
+    final isProfit = pnlTotal >= 0;
+    final pnlColor = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+    final pnlIcon  = isProfit ? '▲' : '▼';
+
+    final displayValue = portfolio.displayValueINR;
+    final showWallets  = portfolio.usesGlobalWallets;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'PORTFOLIO VALUE',
-            style: GoogleFonts.jetBrainsMono(
-              color: Colors.grey.shade500,
-              fontSize: 10,
-              letterSpacing: 2,
-            ),
+          Row(
+            children: [
+              Text(
+                'PORTFOLIO VALUE',
+                style: GoogleFonts.jetBrainsMono(
+                  color: Colors.grey.shade500,
+                  fontSize: 10,
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (showWallets)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00C853).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: const Color(0xFF00C853).withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    '🌐 GLOBAL',
+                    style: GoogleFonts.jetBrainsMono(
+                      color: const Color(0xFF00C853),
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 6),
 
-          // Large value display
+          // Large value display (always in INR)
           Text(
-            _formatINR(portfolio.totalValue),
+            _formatINR(displayValue),
             style: GoogleFonts.jetBrainsMono(
               color: Colors.white,
               fontSize: 32,
@@ -255,15 +292,21 @@ class _PortfolioValueSection extends StatelessWidget {
             ),
           ),
 
+          // Global: live FX rate and market info
+          if (showWallets) ...[
+            const SizedBox(height: 4),
+            Text(
+              '🌐 Unified pool · USD/INR ₹${portfolio.usdInrRate.toStringAsFixed(1)} live rate',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+            ),
+          ],
+
           const SizedBox(height: 8),
 
           // P&L row
           Row(
             children: [
-              Text(
-                pnlIcon,
-                style: TextStyle(color: pnlColor, fontSize: 12),
-              ),
+              Text(pnlIcon, style: TextStyle(color: pnlColor, fontSize: 12)),
               const SizedBox(width: 4),
               Text(
                 '${isProfit ? '+' : ''}${_formatINR(pnlTotal)}',
@@ -294,14 +337,11 @@ class _PortfolioValueSection extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    'Cash',
-                    style: TextStyle(
-                      color: Colors.grey.shade500,
-                      fontSize: 10,
-                    ),
+                    showWallets ? 'Available' : 'Cash',
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 10),
                   ),
                   Text(
-                    _formatINR(portfolio.cash),
+                    _formatINR(portfolio.availableCashINR),
                     style: GoogleFonts.jetBrainsMono(
                       color: Colors.white70,
                       fontSize: 13,
@@ -374,8 +414,24 @@ class _HoldingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isProfit = holding.isProfit;
-    final pnlColor = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+    final isProfit   = holding.isProfit;
+    final pnlColor   = isProfit ? const Color(0xFF00C853) : const Color(0xFFFF3B30);
+    final isForeign  = holding.isForeign;
+    final currSymbol = isForeign
+        ? (holding.currency == 'USD' ? '\$'
+            : holding.currency == 'EUR' ? '€'
+            : holding.currency == 'JPY' ? '¥' : '₹')
+        : '₹';
+
+    // P&L to display — native currency for foreign, INR for India
+    final pnlDisplay = isForeign
+        ? '$currSymbol${holding.unrealizedPnl.abs().toStringAsFixed(2)}'
+        : _formatINR(holding.unrealizedPnl);
+
+    // Days held label
+    final heldLabel = isForeign
+        ? '${holding.daysHeld}d held'
+        : (holding.cyclesHeld > 0 ? '${holding.minutesHeld} min' : '${holding.daysHeld}d held');
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
@@ -383,9 +439,7 @@ class _HoldingCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF161B22),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: pnlColor.withOpacity(0.2),
-        ),
+        border: Border.all(color: pnlColor.withOpacity(0.2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -393,6 +447,10 @@ class _HoldingCard extends StatelessWidget {
           // Header
           Row(
             children: [
+              if (isForeign) ...[
+                Text(holding.countryFlag, style: const TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+              ],
               Text(
                 holding.symbol,
                 style: GoogleFonts.jetBrainsMono(
@@ -404,14 +462,14 @@ class _HoldingCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  holding.companyName,
+                  holding.companyName.isNotEmpty ? holding.companyName : holding.market,
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              // Unrealized P&L
+              // P&L in native currency
               Text(
-                '${isProfit ? '+' : ''}${_formatINR(holding.unrealizedPnl)}',
+                '${isProfit ? '+' : '-'}$pnlDisplay',
                 style: GoogleFonts.jetBrainsMono(
                   color: pnlColor,
                   fontSize: 13,
@@ -426,7 +484,7 @@ class _HoldingCard extends StatelessWidget {
           Row(
             children: [
               Text(
-                '${holding.quantity} × ₹${holding.currentPrice.toStringAsFixed(2)}',
+                '${holding.quantity} × $currSymbol${holding.currentPrice.toStringAsFixed(2)}',
                 style: GoogleFonts.jetBrainsMono(
                   color: Colors.white70,
                   fontSize: 12,
@@ -442,6 +500,16 @@ class _HoldingCard extends StatelessWidget {
               ),
             ],
           ),
+
+          // INR equivalent for foreign holdings
+          if (isForeign && holding.pnlInINR != 0) ...[
+            const SizedBox(height: 2),
+            Text(
+              '≈ ${isProfit ? '+' : ''}₹${holding.pnlInINR.abs().toStringAsFixed(0)} INR',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+            ),
+          ],
+
           const SizedBox(height: 8),
 
           // Stop loss and target badges
@@ -450,19 +518,18 @@ class _HoldingCard extends StatelessWidget {
               _LevelBadge(
                 label: 'SL',
                 value: holding.stopLoss,
+                currency: currSymbol,
                 color: const Color(0xFFFF3B30),
               ),
               const SizedBox(width: 8),
               _LevelBadge(
                 label: 'TGT',
                 value: holding.target,
+                currency: currSymbol,
                 color: const Color(0xFF00C853),
               ),
               const Spacer(),
-              Text(
-                '${holding.minutesHeld} min held',
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
-              ),
+              Text(heldLabel, style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
             ],
           ),
         ],
@@ -475,7 +542,13 @@ class _LevelBadge extends StatelessWidget {
   final String label;
   final double value;
   final Color color;
-  const _LevelBadge({required this.label, required this.value, required this.color});
+  final String currency;
+  const _LevelBadge({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.currency = '₹',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -487,11 +560,8 @@ class _LevelBadge extends StatelessWidget {
         border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Text(
-        '$label: ₹${value.toStringAsFixed(1)}',
-        style: GoogleFonts.jetBrainsMono(
-          color: color,
-          fontSize: 10,
-        ),
+        '$label: $currency${value.toStringAsFixed(1)}',
+        style: GoogleFonts.jetBrainsMono(color: color, fontSize: 10),
       ),
     );
   }
@@ -504,9 +574,20 @@ class _MarketSentimentBanner extends StatelessWidget {
   final AILog log;
   const _MarketSentimentBanner({required this.log});
 
+  String _marketFlag(String name) {
+    switch (name) {
+      case 'India':   return '🇮🇳';
+      case 'USA':     return '🇺🇸';
+      case 'Germany': return '🇩🇪';
+      case 'Japan':   return '🇯🇵';
+      default:        return '🌐';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final sentimentColor = _sentimentColor(log.marketSentiment);
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(12),
@@ -515,39 +596,75 @@ class _MarketSentimentBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: sentimentColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: sentimentColor.withOpacity(0.4)),
-            ),
-            child: Text(
-              log.marketSentiment,
-              style: GoogleFonts.jetBrainsMono(
-                color: sentimentColor,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sentimentColor.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: sentimentColor.withOpacity(0.4)),
+                ),
+                child: Text(
+                  log.marketSentiment,
+                  style: GoogleFonts.jetBrainsMono(
+                    color: sentimentColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              log.marketAnalysis.isNotEmpty
-                  ? log.marketAnalysis
-                  : 'Monitoring live market conditions...',
-              style: TextStyle(
-                color: Colors.grey.shade400,
-                fontSize: 11,
-                height: 1.4,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  log.marketAnalysis.isNotEmpty
+                      ? log.marketAnalysis
+                      : 'Scanning global markets...',
+                  style: TextStyle(
+                    color: Colors.grey.shade400,
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            ],
           ),
+
+          // Global swing market breakdown
+          if (log.isGlobal) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                if (log.openMarkets.isNotEmpty)
+                  _MiniChip(
+                    label: 'Open: ${log.openMarkets.map(_marketFlag).join(' ')}',
+                    color: const Color(0xFF607D8B),
+                  ),
+                if (log.bullishMarkets.isNotEmpty)
+                  _MiniChip(
+                    label: '📈 ${log.bullishMarkets.map(_marketFlag).join(' ')}',
+                    color: const Color(0xFF00C853),
+                  ),
+                if (log.bearishMarkets.isNotEmpty)
+                  _MiniChip(
+                    label: '📉 ${log.bearishMarkets.map(_marketFlag).join(' ')}',
+                    color: const Color(0xFFFF3B30),
+                  ),
+                if (log.chosenMarket.isNotEmpty)
+                  _MiniChip(
+                    label: '🎯 ${_marketFlag(log.chosenMarket)} ${log.chosenMarket}',
+                    color: const Color(0xFF7C4DFF),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -560,6 +677,28 @@ class _MarketSentimentBanner extends StatelessWidget {
       case 'VOLATILE': return const Color(0xFFFFA726);
       default:         return const Color(0xFF607D8B);
     }
+  }
+}
+
+class _MiniChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _MiniChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 10),
+      ),
+    );
   }
 }
 

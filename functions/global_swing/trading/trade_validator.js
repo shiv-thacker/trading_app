@@ -33,7 +33,10 @@ const logger = require("firebase-functions/logger");
  * @returns {{ ok: boolean, reason: string }}
  */
 function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") {
-  const { holdings = [], inrCash = 0, usdCash = 0, totalValueINR = 0, recentSells = [] } = portfolio;
+  const {
+    holdings = [], capitalINR = 0, usdInrRate = 84.0,
+    totalValueINR = 0, recentSells = [],
+  } = portfolio;
 
   // ① Max total positions ─────────────────────────────────────
   if (holdings.length >= R.MAX_TOTAL_HOLDINGS) {
@@ -63,22 +66,21 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
     }
   }
 
-  // ⑤ Cash reserve check ──────────────────────────────────────
+  // ⑤ Cash reserve check (unified INR pool) ──────────────────
   const isINR    = trade.currency === "INR";
-  const reserve  = isINR ? R.MIN_CASH_RESERVE_INR : R.MIN_CASH_RESERVE_USD;
-  const cashAvail = isINR ? inrCash : usdCash;
+  const tradeINR = isINR
+    ? trade.totalAmount
+    : trade.totalAmount * usdInrRate;
+  const reserveINR = R.MIN_CASH_RESERVE_INR;  // always keep ₹2,000 minimum
 
-  if (cashAvail - trade.totalAmount < reserve) {
+  if (capitalINR - tradeINR < reserveINR) {
     return {
       ok:     false,
-      reason: `Insufficient cash (need ${trade.totalAmount.toFixed(2)} + ${reserve} reserve; have ${cashAvail.toFixed(2)} ${trade.currency})`,
+      reason: `Insufficient capital (need ₹${tradeINR.toFixed(0)} + ₹${reserveINR} reserve; have ₹${capitalINR.toFixed(0)})`,
     };
   }
 
   // ⑥ Position size cap ───────────────────────────────────────
-  const tradeINR = isINR
-    ? trade.totalAmount
-    : trade.totalAmount * (portfolio.usdInrRate || 83.5);
 
   if (tradeINR > totalValueINR * R.MAX_POSITION_PCT) {
     return {

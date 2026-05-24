@@ -77,12 +77,11 @@ async function executeBuy(trade, portfolio, mood = "NEUTRAL") {
   }
 
   // ── PAPER MODE ───────────────────────────────────────────────
-  const isINR = trade.currency === "INR";
-  if (isINR) {
-    portfolio.inrCash -= trade.totalAmount;
-  } else {
-    portfolio.usdCash -= trade.totalAmount;
-  }
+  const isINR     = trade.currency === "INR";
+  const fxRate    = portfolio.usdInrRate || 84.0;
+  // Deduct from unified INR pool (convert foreign amounts at live rate)
+  const costINR   = isINR ? trade.totalAmount : trade.totalAmount * fxRate;
+  portfolio.capitalINR = (portfolio.capitalINR || 0) - costINR;
 
   portfolio.holdings.push({
     symbol:            trade.symbol,
@@ -151,13 +150,10 @@ async function executeSell(trade, portfolio, usdInrRate = 83.5) {
     (Date.now() - (holding.buyTimestamp || Date.now())) / (1000 * 60 * 60 * 24)
   );
 
-  // Add proceeds to the correct wallet
-  const proceeds = sellPrice * sellQty;
-  if (isINR) {
-    portfolio.inrCash += proceeds;
-  } else {
-    portfolio.usdCash += proceeds;
-  }
+  // Add proceeds back to unified INR pool (convert at live rate)
+  const proceeds    = sellPrice * sellQty;
+  const proceedsINR = isINR ? proceeds : proceeds * usdInrRate;
+  portfolio.capitalINR = (portfolio.capitalINR || 0) + proceedsINR;
 
   if (sellQty >= holding.quantity) {
     // Full sell — remove from holdings

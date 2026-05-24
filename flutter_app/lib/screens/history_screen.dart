@@ -1,16 +1,16 @@
 /// screens/history_screen.dart
 /// =============================
-/// Trade history screen — shows all swing trades ARJUN has executed.
+/// Trade history screen — shows all global swing trades ARJUN has executed.
 ///
 /// FEATURES:
 ///   - Filter tabs: ALL | BUY | SELL
 ///   - Real-time updates via Firestore stream
-///   - Each trade shows: symbol, company, timestamp, price × qty,
-///     P&L (for SELL), AI reason, trade type badge, confidence badge
-///   - Summary bar: trade count, realized P&L, win rate
+///   - Each trade shows: flag + symbol, market badge, price × qty,
+///     P&L in native currency + INR equivalent (for SELL), AI reason
+///   - Summary bar: trade count, realized P&L (INR), win rate
 ///
 /// DATA:
-///   Swing: swingTradesStream() — from `swing_trades` collection
+///   Global swing: globalSwingTradesStream() — from `global_swing_trades` collection
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,7 +28,7 @@ final _filterProvider = StateProvider<String?>((ref) => null);
 
 final _tradesProvider = StreamProvider.family<List<Trade>, String?>(
   (ref, filter) {
-    return ref.read(firestoreServiceProvider).swingTradesStream(filter: filter);
+    return ref.read(firestoreServiceProvider).globalSwingTradesStream(filter: filter);
   },
 );
 
@@ -165,11 +165,26 @@ class _SummaryBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sells    = trades.where((t) => t.action == 'SELL').toList();
-    final totalPnl = sells.fold(0.0, (s, t) => s + t.pnl);
-    final winners  = sells.where((t) => t.pnl > 0).length;
+    final sells = trades.where((t) => t.action == 'SELL').toList();
+    // Use pnlDisplayINR for unified comparison across currencies
+    final totalPnl = sells.fold(0.0, (s, t) => s + t.pnlDisplayINR);
+    final winners  = sells.where((t) => t.pnlDisplayINR > 0).length;
     final total    = sells.length;
     final winRate  = total > 0 ? (winners / total * 100) : 0.0;
+
+    // Count unique markets traded
+    final markets = trades.map((t) => t.country).toSet();
+    final marketLabel = markets.length > 1
+        ? markets.map((c) {
+            switch (c) {
+              case 'India':   return '🇮🇳';
+              case 'USA':     return '🇺🇸';
+              case 'Germany': return '🇩🇪';
+              case 'Japan':   return '🇯🇵';
+              default:        return '🌐';
+            }
+          }).join(' ')
+        : 'GLOBAL';
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
@@ -185,7 +200,7 @@ class _SummaryBar extends StatelessWidget {
           _Stat(label: 'TRADES', value: '${trades.length}'),
           _Divider(),
           _Stat(
-            label: 'REALIZED P&L',
+            label: 'P&L (INR)',
             value: '${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toStringAsFixed(0)}',
             valueColor: totalPnl >= 0 ? const Color(0xFF00C853) : const Color(0xFFFF3B30),
           ),
@@ -197,9 +212,9 @@ class _SummaryBar extends StatelessWidget {
           ),
           _Divider(),
           _Stat(
-            label: 'MODE',
-            value: 'SWING',
-            valueColor: const Color(0xFF7C4DFF),
+            label: 'MARKETS',
+            value: marketLabel,
+            valueColor: const Color(0xFF00C853),
           ),
         ],
       ),
@@ -264,8 +279,8 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             filter == null
-                ? 'No swing trades yet'
-                : 'No ${filter!.toLowerCase()} swing trades yet',
+                ? 'No global trades yet'
+                : 'No ${filter!.toLowerCase()} trades yet',
             style: const TextStyle(
               color: Colors.white70,
               fontSize: 16,
@@ -274,7 +289,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'ARJUN swing engine will trade when catalysts are found via web search',
+            'ARJUN ranks 🇮🇳 India · 🇯🇵 Japan · 🇩🇪 Germany · 🇺🇸 USA every hour\nand invests where mood + stock setup are strongest (not fixed to one country)',
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
             textAlign: TextAlign.center,
           ),

@@ -1,17 +1,17 @@
 /// widgets/market_status_bar.dart
 /// ================================
-/// Animated status bar showing ARJUN's live trading status.
+/// Animated status bar showing ARJUN's live global trading status.
 ///
 /// DISPLAYS:
-///   - Animated pulsing dot: green when market is open, grey when closed
-///   - Status text: "ARJUN is scanning 500 NSE stocks..." or "Market closed"
-///   - Countdown timer: MM:SS until next trading cycle
+///   - Animated pulsing dot: green when any market is open, grey when all closed
+///   - Status text: shows which markets are open or "All markets closed"
+///   - Countdown timer: MM:SS until next hourly cycle
 ///
-/// The pulsing animation uses an AnimationController with a sine-wave
-/// opacity curve to create the heartbeat effect.
-///
-/// Market hours check is done client-side (same logic as Cloud Functions):
-///   Open: Monday–Friday, 09:15–15:30 IST
+/// Global market hours (UTC):
+///   India  (NSE):   Mon–Fri 03:45–10:00 UTC
+///   USA    (NYSE):  Mon–Fri 13:30–20:00 UTC
+///   Germany (XETRA):Mon–Fri 07:00–15:30 UTC
+///   Japan  (TSE):   Mon–Fri 00:00–06:30 UTC
 
 import 'dart:async';
 import 'dart:math';
@@ -52,40 +52,48 @@ class _MarketStatusBarState extends State<MarketStatusBar>
 
   void _updateCountdown() {
     final now = DateTime.now();
-    // Next 5-min boundary
-    final nextCycle = now.add(
-      Duration(seconds: 300 - (now.second + now.minute * 60) % 300),
-    );
+    // Next hourly boundary
+    final nextCycle = DateTime(now.year, now.month, now.day, now.hour + 1, 0, 0);
     setState(() {
-      _secondsUntilNext = nextCycle.difference(now).inSeconds.clamp(0, 300);
+      _secondsUntilNext = nextCycle.difference(now).inSeconds.clamp(0, 3600);
     });
   }
 
-  bool get _isMarketOpen {
-    final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
-      return false;
-    }
+  /// Returns list of currently-open market flags (UTC-based check)
+  List<String> get _openMarkets {
+    final now = DateTime.now().toUtc();
+    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) return [];
     final mins = now.hour * 60 + now.minute;
-    return mins >= 555 && mins < 930; // 09:15 to 15:30
+    final open = <String>[];
+    if (mins >= 225 && mins < 600)  open.add('🇮🇳');  // India  03:45–10:00 UTC
+    if (mins >= 420 && mins < 930)  open.add('🇩🇪');  // Germany 07:00–15:30 UTC
+    if (mins >= 810 && mins < 1200) open.add('🇺🇸');  // USA    13:30–20:00 UTC
+    if (mins >= 0   && mins < 390)  open.add('🇯🇵');  // Japan  00:00–06:30 UTC
+    return open;
   }
 
+  bool get _isAnyMarketOpen => _openMarkets.isNotEmpty;
+
   String get _statusText {
-    if (!_isMarketOpen) return 'Market closed — opens Mon 09:15 IST';
+    final open = _openMarkets;
+    if (open.isEmpty) {
+      return 'All markets closed — next cycle at next hour';
+    }
+    final marketsStr = open.join(' ');
     switch (widget.cycleStatus) {
       case 'TRADED':
-        return 'ARJUN executed trades this cycle';
-      case 'WAITED':
-        return 'ARJUN scanning 500 NSE stocks live...';
+        return 'ARJUN executed trades  $marketsStr';
+      case 'ALL_MARKETS_CLOSED':
+        return 'All markets closed — next cycle at next hour';
       default:
-        return 'ARJUN monitoring market live...';
+        return 'ARJUN scanning $marketsStr live...';
     }
   }
 
   String get _countdownText {
     final mins = _secondsUntilNext ~/ 60;
     final secs = _secondsUntilNext % 60;
-    return 'Next cycle: ${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    return 'Next: ${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -97,7 +105,7 @@ class _MarketStatusBarState extends State<MarketStatusBar>
 
   @override
   Widget build(BuildContext context) {
-    final isOpen = _isMarketOpen;
+    final isOpen = _isAnyMarketOpen;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

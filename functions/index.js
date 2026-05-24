@@ -1110,13 +1110,12 @@ exports.resetGlobalPortfolio = functions
 
       await batch.commit();
 
-      // Re-initialize with default capital
+      // Re-initialize with unified capital pool
       await db.collection("global_swing_portfolio").doc("state").set({
         baseCurrency:     "INR",
         startingCapital:  100000,
-        inrCash:          50000,    // ₹50,000 for India trades
-        usdCash:          600.00,   // $600 for US + Germany + Japan trades
-        usdInrRate:       83.5,
+        capitalINR:       100000,   // Single unified pool — AI decides which market
+        usdInrRate:       84.0,     // Will be updated to live rate on next cycle
         totalValueINR:    100000,
         holdings:         [],
         recentSells:      [],
@@ -1124,10 +1123,10 @@ exports.resetGlobalPortfolio = functions
         lastUpdated:      admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      logger.info("Global portfolio reset: ₹50,000 INR + $600 USD");
+      logger.info("Global portfolio reset: ₹1,00,000 unified pool");
       return {
         success: true,
-        message: "Global portfolio reset to ₹50,000 INR + $600 USD (≈ ₹1,00,000 total).",
+        message: "Global portfolio reset to ₹1,00,000 (unified pool across all markets).",
       };
     } catch (err) {
       logger.error("resetGlobalPortfolio failed:", err.message);

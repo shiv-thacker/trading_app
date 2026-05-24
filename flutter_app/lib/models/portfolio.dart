@@ -2,13 +2,18 @@
 /// ======================
 /// Data models for the portfolio state and individual stock holdings.
 ///
-/// Maps to Firestore document: portfolio/state
+/// Supports both the old India-only swing portfolio AND the new
+/// global multi-market portfolio (global_swing_portfolio/state).
 ///
 /// MODELS:
-///   Holding      → A single stock position ARJUN currently holds
-///   Portfolio    → Full portfolio state (cash + all holdings)
+///   Holding      → A single stock position (now includes market/currency fields)
+///   Portfolio    → Full portfolio state (now supports multi-currency wallets)
 ///   Snapshot     → Historical portfolio value at a point in time
-///                  (from portfolio/state/snapshots sub-collection)
+///
+/// BACKWARDS COMPATIBILITY:
+///   Old portfolio doc has: cash, totalValue, startingCapital
+///   New global doc has:    inrCash, usdCash, totalValueINR, startingCapital
+///   Portfolio.fromFirestore() handles both formats automatically.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -29,6 +34,18 @@ class Holding {
   final double target;
   final int cyclesHeld;
 
+  // ── Global swing fields (new) ──────────────────────────────
+  /// Exchange code: "NSE" | "US" | "XETRA" | "T"
+  final String market;
+  /// Country name: "India" | "USA" | "Germany" | "Japan"
+  final String country;
+  /// Position currency: "INR" | "USD" | "EUR" | "JPY"
+  final String currency;
+  /// Unrealized P&L converted to INR (for unified display)
+  final double unrealizedPnlINR;
+  /// How many calendar days held (directly from backend for global swing)
+  final int daysHeldDirect;
+
   const Holding({
     required this.symbol,
     required this.companyName,
@@ -42,6 +59,11 @@ class Holding {
     required this.stopLoss,
     required this.target,
     required this.cyclesHeld,
+    this.market            = 'NSE',
+    this.country           = 'India',
+    this.currency          = 'INR',
+    this.unrealizedPnlINR  = 0,
+    this.daysHeldDirect    = 0,
   });
 
   /// Current market value of this position
@@ -53,36 +75,58 @@ class Holding {
   /// Whether this holding is currently profitable
   bool get isProfit => unrealizedPnl >= 0;
 
-  /// Stop-loss percentage from avg buy price
   double get stopLossPct =>
-      ((stopLoss - avgBuyPrice) / avgBuyPrice) * 100;
+      avgBuyPrice > 0 ? ((stopLoss - avgBuyPrice) / avgBuyPrice) * 100 : 0;
 
-  /// Target percentage from avg buy price
   double get targetPct =>
-      ((target - avgBuyPrice) / avgBuyPrice) * 100;
+      avgBuyPrice > 0 ? ((target - avgBuyPrice) / avgBuyPrice) * 100 : 0;
 
-  /// How many minutes this position has been held (intraday: each cycle = 5 min)
   int get minutesHeld => cyclesHeld * 5;
 
-  /// How many days this position has been held (swing: uses actual buy timestamp)
-  int get daysHeld => DateTime.now().difference(buyTime).inDays;
+  /// Days held: prefer direct field (global swing sets it), fallback to timestamp calc
+  int get daysHeld => daysHeldDirect > 0
+      ? daysHeldDirect
+      : DateTime.now().difference(buyTime).inDays;
 
   DateTime get buyTime => DateTime.fromMillisecondsSinceEpoch(buyTimestamp);
 
+  /// Country flag emoji for display
+  String get countryFlag {
+    switch (country) {
+      case 'India':   return '🇮🇳';
+      case 'USA':     return '🇺🇸';
+      case 'Germany': return '🇩🇪';
+      case 'Japan':   return '🇯🇵';
+      default:        return '🌐';
+    }
+  }
+
+  /// Whether this is a non-India (foreign) position
+  bool get isForeign => currency != 'INR';
+
+  /// P&L in INR (use unrealizedPnlINR if available, else unrealizedPnl for INR positions)
+  double get pnlInINR =>
+      unrealizedPnlINR != 0 ? unrealizedPnlINR : (currency == 'INR' ? unrealizedPnl : 0);
+
   factory Holding.fromMap(Map<String, dynamic> d) {
     return Holding(
-      symbol:           d['symbol']          as String? ?? '',
-      companyName:      d['companyName']      as String? ?? '',
-      sector:           d['sector']           as String? ?? '',
-      quantity:         (d['quantity']        as num?)?.toInt()    ?? 0,
-      avgBuyPrice:      (d['avgBuyPrice']     as num?)?.toDouble() ?? 0,
-      currentPrice:     (d['currentPrice']    as num?)?.toDouble() ?? 0,
-      unrealizedPnl:    (d['unrealizedPnl']   as num?)?.toDouble() ?? 0,
-      unrealizedPnlPct: (d['unrealizedPnlPct']as num?)?.toDouble() ?? 0,
-      buyTimestamp:     (d['buyTimestamp']    as num?)?.toInt()    ?? 0,
-      stopLoss:         (d['stopLoss']        as num?)?.toDouble() ?? 0,
-      target:           (d['target']          as num?)?.toDouble() ?? 0,
-      cyclesHeld:       (d['cyclesHeld']      as num?)?.toInt()    ?? 0,
+      symbol:            d['symbol']             as String? ?? '',
+      companyName:       d['companyName']         as String? ?? '',
+      sector:            d['sector']              as String? ?? '',
+      quantity:          (d['quantity']           as num?)?.toInt()    ?? 0,
+      avgBuyPrice:       (d['avgBuyPrice']        as num?)?.toDouble() ?? 0,
+      currentPrice:      (d['currentPrice']       as num?)?.toDouble() ?? 0,
+      unrealizedPnl:     (d['unrealizedPnl']      as num?)?.toDouble() ?? 0,
+      unrealizedPnlPct:  (d['unrealizedPnlPct']   as num?)?.toDouble() ?? 0,
+      buyTimestamp:      (d['buyTimestamp']       as num?)?.toInt()    ?? 0,
+      stopLoss:          (d['stopLoss']           as num?)?.toDouble() ?? 0,
+      target:            (d['target']             as num?)?.toDouble() ?? 0,
+      cyclesHeld:        (d['cyclesHeld']         as num?)?.toInt()    ?? 0,
+      market:            d['market']              as String? ?? 'NSE',
+      country:           d['country']             as String? ?? 'India',
+      currency:          d['currency']            as String? ?? 'INR',
+      unrealizedPnlINR:  (d['unrealizedPnlINR']   as num?)?.toDouble() ?? 0,
+      daysHeldDirect:    (d['daysHeld']           as num?)?.toInt()    ?? 0,
     );
   }
 
@@ -99,6 +143,10 @@ class Holding {
     'stopLoss':         stopLoss,
     'target':           target,
     'cyclesHeld':       cyclesHeld,
+    'market':           market,
+    'country':          country,
+    'currency':         currency,
+    'unrealizedPnlINR': unrealizedPnlINR,
   };
 }
 
@@ -106,11 +154,21 @@ class Holding {
 // Portfolio — full portfolio state document
 // ─────────────────────────────────────────────────────────────
 class Portfolio {
-  final double cash;
-  final double totalValue;
+  final double cash;        // legacy INR cash (old swing/intraday)
+  final double totalValue;  // legacy total value in INR
   final double startingCapital;
   final List<Holding> holdings;
   final DateTime lastUpdated;
+
+  // ── Global swing fields (new — unified capital) ────────────
+  /// Available cash in ₹ (single pool across all markets)
+  final double capitalINR;
+  /// Total portfolio value in ₹ (capitalINR + all open positions)
+  final double totalValueINR;
+  /// Live USD/INR rate (updated each cycle from EODHD)
+  final double usdInrRate;
+  /// True if this portfolio doc came from global_swing_portfolio
+  final bool isGlobal;
 
   const Portfolio({
     required this.cash,
@@ -118,30 +176,62 @@ class Portfolio {
     required this.startingCapital,
     required this.holdings,
     required this.lastUpdated,
+    this.capitalINR    = 0,
+    this.totalValueINR = 0,
+    this.usdInrRate    = 84.0,
+    this.isGlobal      = false,
   });
 
-  /// Total unrealized P&L across all holdings
   double get unrealizedPnlTotal =>
-      holdings.fold(0.0, (sum, h) => sum + h.unrealizedPnl);
+      holdings.fold(0.0, (acc, h) => acc + h.unrealizedPnl);
 
-  /// Total P&L since inception (realized + unrealized)
-  double get totalPnl => totalValue - startingCapital;
+  double get totalPnl => displayValueINR - startingCapital;
 
-  /// Total P&L as percentage
   double get totalPnlPct =>
       startingCapital > 0 ? (totalPnl / startingCapital) * 100 : 0;
 
-  /// True if portfolio is in profit overall
   bool get isProfit => totalPnl >= 0;
 
-  /// Cash as percentage of total portfolio
-  double get cashPct =>
-      totalValue > 0 ? (cash / totalValue) * 100 : 100;
+  double get _fxRate => usdInrRate > 0 ? usdInrRate : 84.0;
 
-  /// Number of current holdings
+  /// True when this is the global multi-market portfolio
+  bool get usesGlobalWallets =>
+      isGlobal || capitalINR > 0 || totalValueINR > 0;
+
+  /// Available cash in ₹ — unified pool for global portfolio
+  double get availableCashINR {
+    if (!usesGlobalWallets) return cash;
+    if (capitalINR > 0) return capitalINR;
+    return startingCapital > 0 ? startingCapital : cash;
+  }
+
+  /// Best total portfolio value to show in INR
+  double get displayValueINR {
+    if (!usesGlobalWallets) return totalValue;
+    if (totalValueINR > 0) return totalValueINR;
+    return availableCashINR + holdingsValueINR;
+  }
+
+  /// Current market value of all open positions in INR
+  double get holdingsValueINR {
+    return holdings.fold(0.0, (acc, h) {
+      final posValue = h.currentValue;
+      return acc + (h.currency == 'INR' ? posValue : posValue * _fxRate);
+    });
+  }
+
+  /// Amount currently deployed in open stock positions
+  double get investedValueINR =>
+      usesGlobalWallets ? holdingsValueINR : holdings.fold(0.0, (acc, h) => acc + h.currentValue);
+
+  double get cashPct {
+    final tv = displayValueINR;
+    final c  = availableCashINR;
+    return tv > 0 ? (c / tv) * 100 : 100;
+  }
+
   int get holdingsCount => holdings.length;
 
-  /// Whether portfolio has capacity for more holdings (max 5)
   bool get canBuyMore => holdings.length < 5;
 
   factory Portfolio.fromFirestore(DocumentSnapshot doc) {
@@ -159,22 +249,93 @@ class Portfolio {
       lastUpdated = DateTime.now();
     }
 
+    final usdInrRate = (d['usdInrRate'] as num?)?.toDouble() ?? 84.0;
+    final startingCapital =
+        (d['startingCapital'] as num?)?.toDouble() ?? 100000;
+
+    final isGlobal = d.containsKey('capitalINR') ||
+        d.containsKey('inrCash') ||
+        d.containsKey('totalValueINR') ||
+        d.containsKey('baseCurrency');
+
+    final resolvedCapitalINR = _resolveCapitalINR(d, isGlobal, startingCapital, usdInrRate);
+    final holdingsValue = _holdingsValueINR(holdings, usdInrRate);
+    final resolvedTotalValueINR =
+        _resolveTotalValueINR(d, isGlobal, resolvedCapitalINR, holdingsValue);
+
     return Portfolio(
-      cash:            (d['cash']            as num?)?.toDouble() ?? 10000,
-      totalValue:      (d['totalValue']      as num?)?.toDouble() ?? 10000,
-      startingCapital: (d['startingCapital'] as num?)?.toDouble() ?? 10000,
+      cash:            resolvedCapitalINR,
+      totalValue:      resolvedTotalValueINR,
+      startingCapital: startingCapital,
       holdings:        holdings,
       lastUpdated:     lastUpdated,
+      capitalINR:      resolvedCapitalINR,
+      totalValueINR:   resolvedTotalValueINR,
+      usdInrRate:      usdInrRate,
+      isGlobal:        isGlobal,
     );
   }
 
-  /// Returns an empty default portfolio (used before Firestore loads)
-  factory Portfolio.empty() => Portfolio(
-    cash:            10000,
-    totalValue:      10000,
-    startingCapital: 10000,
+  static double _holdingsValueINR(List<Holding> holdings, double usdInrRate) {
+    final rate = usdInrRate > 0 ? usdInrRate : 84.0;
+    return holdings.fold(0.0, (acc, h) {
+      final posValue = h.currentValue;
+      return acc + (h.currency == 'INR' ? posValue : posValue * rate);
+    });
+  }
+
+  /// Migrate legacy cash / dual-wallet fields into unified capitalINR
+  static double _resolveCapitalINR(
+    Map<String, dynamic> d,
+    bool isGlobal,
+    double startingCapital,
+    double usdInrRate,
+  ) {
+    final capital = (d['capitalINR'] as num?)?.toDouble() ?? 0;
+    if (capital > 0) return capital;
+
+    final inrCash = (d['inrCash'] as num?)?.toDouble() ?? 0;
+    final usdCash = (d['usdCash'] as num?)?.toDouble() ?? 0;
+    final rate = usdInrRate > 0 ? usdInrRate : 84.0;
+    if (inrCash > 0 || usdCash > 0) return inrCash + usdCash * rate;
+
+    final legacyCash = (d['cash'] as num?)?.toDouble() ?? 0;
+    // Stale ₹10k cash with ₹1L starting — ignore legacy field
+    if (isGlobal &&
+        legacyCash > 0 &&
+        startingCapital >= 50000 &&
+        legacyCash < startingCapital * 0.5) {
+      return startingCapital;
+    }
+    if (legacyCash > 0) return legacyCash;
+    return isGlobal ? startingCapital : legacyCash;
+  }
+
+  static double _resolveTotalValueINR(
+    Map<String, dynamic> d,
+    bool isGlobal,
+    double capitalINR,
+    double holdingsValueINR,
+  ) {
+    final totalValueINR = (d['totalValueINR'] as num?)?.toDouble() ?? 0;
+    if (totalValueINR > 0) return totalValueINR;
+    if (isGlobal) return capitalINR + holdingsValueINR;
+    return (d['totalValue'] as num?)?.toDouble() ?? capitalINR;
+  }
+
+  /// Default placeholder before Firestore loads (global multi-currency)
+  factory Portfolio.empty() => Portfolio.emptyGlobal();
+
+  factory Portfolio.emptyGlobal() => Portfolio(
+    cash:            100000,
+    totalValue:      100000,
+    startingCapital: 100000,
     holdings:        [],
     lastUpdated:     DateTime.now(),
+    capitalINR:      100000,
+    totalValueINR:   100000,
+    usdInrRate:      84.0,
+    isGlobal:        true,
   );
 }
 
@@ -208,12 +369,20 @@ class Snapshot {
       ts = DateTime.now();
     }
 
+    // Global swing snapshots store totalValueINR; fall back to totalValue for old format
+    final totalValue = (d['totalValueINR'] as num?)?.toDouble()
+                    ?? (d['totalValue']    as num?)?.toDouble()
+                    ?? 0;
+    final cash       = (d['inrCash']  as num?)?.toDouble()
+                    ?? (d['cash']     as num?)?.toDouble()
+                    ?? 0;
+
     return Snapshot(
       timestamp:     ts,
-      totalValue:    (d['totalValue']   as num?)?.toDouble() ?? 0,
-      cash:          (d['cash']         as num?)?.toDouble() ?? 0,
-      holdingsCount: (d['holdingsCount']as num?)?.toInt()    ?? 0,
-      pnlTotal:      (d['pnlTotal']     as num?)?.toDouble() ?? 0,
+      totalValue:    totalValue,
+      cash:          cash,
+      holdingsCount: (d['holdingsCount'] as num?)?.toInt()    ?? 0,
+      pnlTotal:      (d['pnlTotal']      as num?)?.toDouble() ?? 0,
     );
   }
 }

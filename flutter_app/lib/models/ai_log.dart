@@ -2,20 +2,24 @@
 /// ===================
 /// Data model for a single ARJUN AI thinking cycle log.
 ///
-/// Maps to a document in the Firestore `ai_logs` collection.
-/// One document is created every 5-minute trading cycle.
-/// Displayed in the "AI Brain" screen in the Flutter app.
+/// Supports both old India-only swing logs AND new global multi-market logs.
 ///
 /// Fields:
 ///   id              → Firestore document ID
 ///   timestampMs     → Unix epoch ms of this cycle
 ///   marketAnalysis  → Claude's 2-3 sentence market summary
-///   thoughts        → Array of ARJUN's timestamped reasoning steps
+///   thoughts        → Array of ARJUN's reasoning steps
 ///   portfolioHealth → "STRONG" | "OK" | "WEAK"
-///   marketSentiment → "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE"
+///   marketSentiment → Overall mood: "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE"
 ///   nextFocus       → What ARJUN will watch for next cycle
 ///   tradeCount      → Number of trades executed this cycle
-///   cycleStatus     → "TRADED" | "WAITED" | "MARKET_CLOSED"
+///   cycleStatus     → "TRADED" | "WAITED" | "ALL_MARKETS_CLOSED"
+///
+/// Global swing extra fields:
+///   openMarkets     → Markets that were open this cycle (e.g. ["India", "USA"])
+///   bullishMarkets  → Markets deemed bullish (e.g. ["India"])
+///   bearishMarkets  → Markets deemed bearish
+///   chosenMarket    → Market ARJUN chose to focus on this cycle
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -24,11 +28,17 @@ class AILog {
   final int timestampMs;
   final String marketAnalysis;
   final List<String> thoughts;
-  final String portfolioHealth;   // "STRONG" | "OK" | "WEAK"
-  final String marketSentiment;   // "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE"
+  final String portfolioHealth;
+  final String marketSentiment;
   final String nextFocus;
   final int tradeCount;
-  final String cycleStatus;       // "TRADED" | "WAITED" | "MARKET_CLOSED"
+  final String cycleStatus;
+
+  // ── Global swing fields (new) ──────────────────────────────
+  final List<String> openMarkets;
+  final List<String> bullishMarkets;
+  final List<String> bearishMarkets;
+  final String chosenMarket;
 
   const AILog({
     required this.id,
@@ -40,21 +50,39 @@ class AILog {
     required this.nextFocus,
     required this.tradeCount,
     required this.cycleStatus,
+    this.openMarkets    = const [],
+    this.bullishMarkets = const [],
+    this.bearishMarkets = const [],
+    this.chosenMarket   = '',
   });
 
   DateTime get timestamp => DateTime.fromMillisecondsSinceEpoch(timestampMs);
 
-  /// Whether this cycle executed any trades
   bool get hasTraded => cycleStatus == 'TRADED';
 
-  /// Whether this was a market-closed cycle
-  bool get isMarketClosed => cycleStatus == 'MARKET_CLOSED';
+  bool get isMarketClosed => cycleStatus == 'ALL_MARKETS_CLOSED' || cycleStatus == 'MARKET_CLOSED';
+
+  bool get isGlobal => openMarkets.isNotEmpty || chosenMarket.isNotEmpty;
+
+  /// Flag emoji for the chosen market
+  String get chosenMarketFlag {
+    switch (chosenMarket) {
+      case 'India':   return '🇮🇳';
+      case 'USA':     return '🇺🇸';
+      case 'Germany': return '🇩🇪';
+      case 'Japan':   return '🇯🇵';
+      default:        return '';
+    }
+  }
 
   factory AILog.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
 
     final thoughtsRaw = d['thoughts'] as List<dynamic>? ?? [];
     final thoughts = thoughtsRaw.map((t) => t.toString()).toList();
+
+    List<String> toStringList(dynamic raw) =>
+        (raw as List<dynamic>? ?? []).map((e) => e.toString()).toList();
 
     return AILog(
       id:              doc.id,
@@ -68,6 +96,10 @@ class AILog {
       nextFocus:       d['nextFocus']       as String? ?? '',
       tradeCount:      (d['tradeCount']     as num?)?.toInt() ?? 0,
       cycleStatus:     d['cycleStatus']     as String? ?? 'WAITED',
+      openMarkets:     toStringList(d['openMarkets']),
+      bullishMarkets:  toStringList(d['bullishMarkets']),
+      bearishMarkets:  toStringList(d['bearishMarkets']),
+      chosenMarket:    d['chosenMarket']    as String? ?? '',
     );
   }
 }

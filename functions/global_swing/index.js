@@ -32,7 +32,7 @@
 const logger = require("firebase-functions/logger");
 
 // ── Data layer ────────────────────────────────────────────────
-const { getLiveQuotes, getTopMovers }       = require("./data/eodhd_live");
+const { getLiveQuotes, getTopMovers, getLiveUsdInrRate } = require("./data/eodhd_live");
 const { getBatchHistoricalCandles }         = require("./data/eodhd_history");
 const { getNSELivePrices }                  = require("./data/nse_live");
 const { clearEohdCache }                    = require("./data/eodhd_client");
@@ -77,14 +77,19 @@ async function runGlobalSwingCycle() {
   // Fresh cycle → clear stale EODHD cache
   clearEohdCache();
 
-  // ── ① Read portfolio ────────────────────────────────────────
+  // ── ① Read portfolio + fetch live USD/INR rate ──────────────
   let portfolio;
   try {
     portfolio = await getPortfolioState();
+
+    // Update to live FX rate every cycle (non-fatal if it fails)
+    const liveRate = await getLiveUsdInrRate();
+    portfolio.usdInrRate = liveRate;
+
     logger.info(
-      `Portfolio: ₹${portfolio.inrCash?.toFixed(0)} INR | ` +
-      `$${portfolio.usdCash?.toFixed(2)} USD | ` +
-      `${portfolio.holdings?.length} holdings`
+      `Portfolio: ₹${(portfolio.capitalINR || 0).toFixed(0)} available | ` +
+      `${portfolio.holdings?.length} holdings | ` +
+      `USD/INR: ₹${liveRate}`
     );
   } catch (err) {
     logger.error("Cannot read portfolio — aborting cycle:", err.message);
@@ -113,10 +118,10 @@ async function runGlobalSwingCycle() {
   const bullishOpen = selectBullishOpenMarkets(marketMoods);
   const openMarkets = Object.keys(marketMoods).filter(c => marketMoods[c].isOpen);
 
-  logger.info(
-    `Open markets: [${openMarkets.join(", ")}] | ` +
-    `Bullish+open: [${bullishOpen.map(m => m.marketCode).join(", ") || "none"}]`
-  );
+  const rankedSummary = bullishOpen.length > 0
+    ? bullishOpen.map(m => `${m.flag}${m.marketCode}(${m.score})`).join(" → ")
+    : "none — hold cash";
+  logger.info(`Open markets: [${openMarkets.join(", ")}] | Bullish rank: ${rankedSummary}`);
 
   // ── ③ Live prices for current holdings ──────────────────────
   if (portfolio.holdings.length > 0) {
@@ -150,7 +155,7 @@ async function runGlobalSwingCycle() {
       }
 
       portfolio.holdings = updateHoldingsPnL(
-        portfolio.holdings, priceMap, portfolio.usdInrRate || 83.5
+        portfolio.holdings, priceMap, portfolio.usdInrRate || 84.0
       );
       logger.info(`Updated prices for ${Object.keys(priceMap).length}/${holdSymbols.length} holdings`);
 
@@ -179,7 +184,7 @@ async function runGlobalSwingCycle() {
           confidence: "HIGH",
         },
         portfolio,
-        portfolio.usdInrRate || 83.5
+        portfolio.usdInrRate || 84.0
       );
       autoStopSymbols.push(h.symbol);
     }
@@ -335,7 +340,7 @@ async function runGlobalSwingCycle() {
         continue;
       }
 
-      const executed = await executeSell(trade, portfolio, portfolio.usdInrRate || 83.5);
+      const executed = await executeSell(trade, portfolio, portfolio.usdInrRate || 84.0);
       if (executed) tradesExecuted++;
     }
   }
@@ -370,7 +375,7 @@ async function runGlobalSwingCycle() {
 
   logger.info("═══════════════════════════════════════════════");
   logger.info(`  ARJUN Global Swing: ${cycleStatus} | ${tradesExecuted} Claude trades | ${autoStopSymbols.length} auto-stops | ${elapsed}s`);
-  logger.info(`  Portfolio: ₹${portfolio.totalValueINR?.toFixed(0)} | P&L: ₹${((portfolio.totalValueINR || 0) - (portfolio.startingCapital || 100000)).toFixed(0)}`);
+  logger.info(`  Portfolio: ₹${(portfolio.totalValueINR || 0).toFixed(0)} | Cash: ₹${(portfolio.capitalINR || 0).toFixed(0)} | P&L: ₹${((portfolio.totalValueINR || 0) - (portfolio.startingCapital || 100000)).toFixed(0)}`);
   logger.info("═══════════════════════════════════════════════");
 
   return { cycleStatus, tradesExecuted };

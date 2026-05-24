@@ -24,11 +24,13 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  bool _isTriggering      = false;
-  bool _isResetting       = false;
-  bool _isDummyTrading    = false;
-  bool _isSwingTriggering = false;
-  bool _isSwingResetting  = false;
+  bool _isTriggering        = false;
+  bool _isResetting         = false;
+  bool _isDummyTrading      = false;
+  bool _isSwingTriggering   = false;
+  bool _isSwingResetting    = false;
+  bool _isGlobalTriggering  = false;
+  bool _isGlobalResetting   = false;
 
   // ── Manual trigger ──────────────────────────────────────────
   Future<void> _runManualCycle() async {
@@ -141,6 +143,76 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  // ── Global swing manual trigger ─────────────────────────────
+  Future<void> _runGlobalSwingCycle() async {
+    setState(() => _isGlobalTriggering = true);
+    final result = await ref.read(firestoreServiceProvider).triggerManualGlobalSwingCycle();
+    if (!mounted) return;
+    setState(() => _isGlobalTriggering = false);
+
+    final success = result['success'] as bool? ?? false;
+    if (success) {
+      final r = result['result'] as Map? ?? {};
+      _showSnack(
+        '✅ Global cycle done: ${r['status'] ?? 'completed'} · ₹${(r['portfolioValueINR'] ?? 0).toStringAsFixed(0)}',
+        color: const Color(0xFF00C853),
+      );
+    } else {
+      _showSnack('❌ ${result['error'] ?? 'Global trigger failed'}', color: Colors.red);
+    }
+  }
+
+  // ── Global portfolio reset ───────────────────────────────────
+  Future<void> _resetGlobalPortfolio() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Reset Global Portfolio?',
+          style: GoogleFonts.jetBrainsMono(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'This will reset to ₹50,000 INR + \$600 USD and delete all global trade history, AI logs, and snapshots.',
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey.shade500)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00C853),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reset Global'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isGlobalResetting = true);
+    final result = await ref.read(firestoreServiceProvider).resetGlobalPortfolio();
+    if (!mounted) return;
+    setState(() => _isGlobalResetting = false);
+
+    final success = result['success'] as bool? ?? false;
+    if (success) {
+      _showSnack('✅ Global portfolio reset to ₹50,000 + \$600', color: const Color(0xFF00C853));
+    } else {
+      _showSnack('❌ ${result['error'] ?? 'Global reset failed'}', color: Colors.red);
+    }
+  }
+
   // ── Swing reset ─────────────────────────────────────────────
   Future<void> _resetSwingPortfolio() async {
     final confirmed = await showDialog<bool>(
@@ -225,74 +297,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── ARJUN Control (intraday — disabled) ────────────
-          // _SectionHeader(label: 'ARJUN CONTROL'),
-          // const SizedBox(height: 8),
+          // ── Global Swing Control ───────────────────────────
+          _SectionHeader(label: 'GLOBAL SWING CONTROL'),
+          const SizedBox(height: 8),
 
-          // _SettingsCard(
-          //   children: [
-          //     _ActionTile(
-          //       icon: Icons.play_circle_outline_rounded,
-          //       iconColor: const Color(0xFF00FF88),
-          //       title: 'Run one trading cycle now',
-          //       subtitle: 'Manually trigger ARJUN — useful for testing',
-          //       loading: _isTriggering,
-          //       onTap: _runManualCycle,
-          //     ),
-          //     Divider(color: Colors.white.withOpacity(0.06)),
-          //     _ActionTile(
-          //       icon: Icons.bug_report_rounded,
-          //       iconColor: const Color(0xFF4FC3F7),
-          //       title: 'Run dummy buy/sell test',
-          //       subtitle: 'Executes synthetic trade even if market is closed',
-          //       subtitle2: 'No portfolio cash/holdings change',
-          //       loading: _isDummyTrading,
-          //       onTap: _runDummyTradeTest,
-          //     ),
-          //     Divider(color: Colors.white.withOpacity(0.06)),
-          //     _ActionTile(
-          //       icon: Icons.restart_alt_rounded,
-          //       iconColor: const Color(0xFFFF3B30),
-          //       title: 'Reset portfolio',
-          //       subtitle: 'Reset to ₹10,000 and clear all history',
-          //       subtitle2: 'Only available when market is closed',
-          //       loading: _isResetting,
-          //       onTap: _resetPortfolio,
-          //       destructive: true,
-          //     ),
-          //   ],
-          // ),
+          _SettingsCard(
+            children: [
+              _ActionTile(
+                icon: Icons.public_rounded,
+                iconColor: const Color(0xFF00C853),
+                title: 'Run one global cycle now',
+                subtitle: 'Scans 🇮🇳 India · 🇺🇸 USA · 🇩🇪 Germany · 🇯🇵 Japan',
+                subtitle2: 'Uses EODHD + Claude — no web search needed',
+                loading: _isGlobalTriggering,
+                onTap: _runGlobalSwingCycle,
+              ),
+              Divider(color: Colors.white.withOpacity(0.06)),
+              _ActionTile(
+                icon: Icons.restart_alt_rounded,
+                iconColor: const Color(0xFFFF3B30),
+                title: 'Reset global portfolio',
+                subtitle: 'Reset to ₹50,000 INR + \$600 USD, clear all history',
+                subtitle2: 'Only available when all markets are closed',
+                loading: _isGlobalResetting,
+                onTap: _resetGlobalPortfolio,
+                destructive: true,
+              ),
+            ],
+          ),
 
-          // ── Swing Trading Control (hidden for production) ───
-          // _SectionHeader(label: 'SWING TRADING CONTROL'),
-          // const SizedBox(height: 8),
-          //
-          // _SettingsCard(
-          //   children: [
-          //     _ActionTile(
-          //       icon: Icons.travel_explore_rounded,
-          //       iconColor: const Color(0xFF7C4DFF),
-          //       title: 'Run one swing cycle now',
-          //       subtitle: 'Manually trigger swing AI — uses web search',
-          //       subtitle2: 'Browses Indian financial news live via Claude',
-          //       loading: _isSwingTriggering,
-          //       onTap: _runSwingCycle,
-          //     ),
-          //     Divider(color: Colors.white.withOpacity(0.06)),
-          //     _ActionTile(
-          //       icon: Icons.restart_alt_rounded,
-          //       iconColor: const Color(0xFF7C4DFF).withOpacity(0.8),
-          //       title: 'Reset swing portfolio',
-          //       subtitle: 'Reset swing to ₹10,000 and clear swing history',
-          //       subtitle2: 'Only available when market is closed',
-          //       loading: _isSwingResetting,
-          //       onTap: _resetSwingPortfolio,
-          //       destructive: false,
-          //     ),
-          //   ],
-          // ),
-          //
-          // const SizedBox(height: 24),
+          const SizedBox(height: 24),
 
           // ── About ──────────────────────────────────────────
           _SectionHeader(label: 'ABOUT'),
@@ -309,25 +343,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _InfoTile(
                 icon: Icons.bar_chart_rounded,
                 label: 'Data Source',
-                value: 'NSE via yfinance (Nifty 500)',
+                value: 'EODHD + NSE (India fallback)',
               ),
-              // Divider(color: Colors.white.withOpacity(0.06)),
-              // _InfoTile(
-              //   icon: Icons.schedule_rounded,
-              //   label: 'Intraday Cycle',
-              //   value: 'Every 5 min, 09:15–15:30 IST',
-              // ),
+              Divider(color: Colors.white.withOpacity(0.06)),
+              _InfoTile(
+                icon: Icons.public_rounded,
+                label: 'Markets',
+                value: '🇮🇳 🇺🇸 🇩🇪 🇯🇵  India/US/DE/JP',
+              ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.access_time_rounded,
-                label: 'Swing Cycle',
-                value: 'Every hour, 09:00–15:00 IST',
+                label: 'Global Cycle',
+                value: 'Every hour, Mon–Fri UTC',
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
                 icon: Icons.account_balance_wallet_rounded,
                 label: 'Capital',
-                value: '₹10,000 swing',
+                value: '₹50,000 INR + \$600 USD',
               ),
               Divider(color: Colors.white.withOpacity(0.06)),
               _InfoTile(
@@ -370,8 +404,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(height: 10),
                 Text(
                   'AI Trader is a virtual trading simulator for educational purposes only. '
-                  'No real money is involved. All trades are simulated with virtual ₹10,000. '
-                  'This is NOT investment advice and is NOT regulated by SEBI. '
+                  'No real money is involved. All trades are simulated with virtual ₹50,000 INR + \$600 USD. '
+                  'This is NOT investment advice and is NOT regulated by SEBI/SEC/BaFin. '
                   'Past simulated performance does not indicate future real returns. '
                   'Do NOT make real investment decisions based on this app.',
                   style: TextStyle(

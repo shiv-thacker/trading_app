@@ -26,11 +26,10 @@
  *   US:    EODHD real-time (WebSocket on $29.99 plan)
  *   DE/JP: EODHD ~15 min delayed (swing hourly — acceptable delay)
  *
- * CAPITAL RECOMMENDATION (paper trading):
- *   Total: ₹1,00,000
- *   inrCash: ₹50,000  → India NSE trades
- *   usdCash: $600      → US + Germany + Japan ($1 ≈ ₹83.5)
- *   This lets you buy 1–3 shares per position in each market.
+ * CAPITAL (paper trading):
+ *   Single unified pool: capitalINR ₹1,00,000
+ *   ARJUN picks which country to invest in each cycle based on mood score + stock setup.
+ *   No fixed per-country allocation.
  */
 
 const MARKETS = {
@@ -47,8 +46,6 @@ const MARKETS = {
     closeTimeLocal:   "15:30",      // Market close in exchange local time
     indexSymbol:      "NSEI.INDX",  // Nifty 50 — confirmed working on EODHD
     useNSELiveFallback: true,       // Try NSE free API first; EODHD if NSE fails
-    portfolioWallet:  "INR",        // Cash wallet key in portfolio state
-    allocPct:         0.40,         // 40% of total portfolio allocated to India
     // Curated Nifty 50 universe — most liquid, covers all major sectors
     watchlist: [
       "RELIANCE.NSE",  "TCS.NSE",       "HDFCBANK.NSE",  "INFY.NSE",      "ICICIBANK.NSE",
@@ -72,8 +69,6 @@ const MARKETS = {
     closeTimeLocal:   "16:00",      // ET 16:00 = IST ~01:30 next morning
     indexSymbol:      "GSPC.INDX",  // S&P 500 index on EODHD
     useNSELiveFallback: false,
-    portfolioWallet:  "USD",
-    allocPct:         0.35,
     // Top 30 S&P 500 stocks by daily volume + sector diversity
     watchlist: [
       "AAPL.US",  "MSFT.US",  "NVDA.US",  "AMZN.US",  "META.US",
@@ -97,9 +92,6 @@ const MARKETS = {
     closeTimeLocal:   "17:30",      // CET/CEST 17:30
     indexSymbol:      "GDAXI.INDX", // DAX index on EODHD
     useNSELiveFallback: false,
-    // Germany uses USD wallet for paper trading (IBKR handles EUR<>USD live)
-    portfolioWallet:  "USD",
-    allocPct:         0.125,
     // Top DAX stocks + large-caps
     watchlist: [
       "SAP.XETRA",   "SIE.XETRA",   "ALV.XETRA",   "MRK.XETRA",   "BMW.XETRA",
@@ -122,8 +114,6 @@ const MARKETS = {
     closeTimeLocal:   "15:30",      // JST 15:30 = IST 12:00 (includes lunch 11:30–12:30)
     indexSymbol:      "N225.INDX",  // Nikkei 225 on EODHD
     useNSELiveFallback: false,
-    portfolioWallet:  "USD",        // USD wallet for paper; IBKR handles JPY live
-    allocPct:         0.125,
     // Top Nikkei 225 stocks by international recognition + liquidity
     watchlist: [
       "7203.T",  "6758.T",  "7974.T",  "8306.T",  "8316.T",

@@ -47,6 +47,28 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ── Global Swing portfolio ───────────────────────────────
+    match /global_swing_portfolio/state {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /global_swing_portfolio/state/snapshots/{snap} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Global Swing trades ──────────────────────────────────
+    match /global_swing_trades/{trade} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Global Swing AI logs ─────────────────────────────────
+    match /global_swing_ai_logs/{log} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Deny everything else
     match /{document=**} {
       allow read, write: if false;
