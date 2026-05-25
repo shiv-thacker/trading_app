@@ -225,8 +225,9 @@ async function runGlobalSwingCycle() {
 
         if (movers.length === 0) {
           // Fallback: screener unavailable → use expanded watchlist
+          // Use minChangePct=0.3 for fallback so delayed EODHD data still surfaces movers
           logger.warn(`${mood.marketCode} screener returned 0 — falling back to watchlist`);
-          movers = await getTopMovers(market.watchlist, R.MIN_CHANGE_PCT, 15);
+          movers = await getTopMovers(market.watchlist, 0.3, 15);
         }
       }
 

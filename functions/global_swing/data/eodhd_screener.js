@@ -144,32 +144,50 @@ async function getDynamicTopMovers(marketCode, minChangePct = 1.0, topN = 20) {
 async function _fetchScreenerUniverse(cfg) {
   const cacheKey = `screener_${cfg.exchange}_${new Date().toISOString().split("T")[0]}`;
 
-  // EODHD screener requires filters as a JSON string in the query param.
-  // Numeric values must be numbers (not strings) to avoid 422 errors.
+  // EODHD screener valid filter fields: exchange, code, name, market_capitalization,
+  //   sector, industry. NOTE: "volume" is NOT a valid screener filter field → causes 422.
+  //   Volume filtering happens in Step 3 after live quotes are fetched.
   const filters = JSON.stringify([
-    ["exchange",              "=",  cfg.exchange      ],
-    ["market_capitalization", ">",  cfg.minMarketCap  ],
-    ["volume",                ">",  cfg.minVolume     ],
+    ["exchange",              "=",  cfg.exchange     ],
+    ["market_capitalization", ">",  cfg.minMarketCap ],
   ]);
+
+  // Log exact params so we can verify what's being sent
+  logger.info(
+    `Screener request [${cfg.exchange}]: filters=${filters} | ` +
+    `sort=change_p.desc | limit=${cfg.universeSize}`
+  );
 
   const data = await eohdGet(
     "/screener",
     {
       filters,
       sort:   "change_p.desc",
-      limit:  String(cfg.universeSize),
-      offset: "0",
+      limit:  cfg.universeSize,
+      offset: 0,
     },
     cacheKey,
     SCREENER_TTL
   );
 
+  if (!data) {
+    logger.warn(`Screener [${cfg.exchange}]: API returned null (see 422/error above)`);
+    return [];
+  }
+
+  // Log raw response shape
+  const count = Array.isArray(data.data) ? data.data.length : "?";
+  logger.info(`Screener [${cfg.exchange}]: API success → ${count} raw results | total: ${data.total ?? "?"}`);
+
   if (!data?.data || !Array.isArray(data.data)) return [];
 
   // Convert bare ticker → EODHD symbol format (e.g. "AAPL" → "AAPL.US")
-  return data.data
+  const symbols = data.data
     .filter(item => item.code && item.code.length > 0)
     .map(item => `${item.code}${cfg.suffix}`);
+
+  logger.info(`Screener [${cfg.exchange}]: ${symbols.length} valid symbols extracted (sample: ${symbols.slice(0, 5).join(", ")})`);
+  return symbols;
 }
 
 module.exports = { getDynamicTopMovers };

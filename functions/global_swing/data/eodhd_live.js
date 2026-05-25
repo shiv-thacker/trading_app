@@ -93,7 +93,10 @@ async function getLiveQuotes(symbols) {
     const cacheKey = `live_${[...batch].sort().join("_")}`;
 
     const data = await eohdGet(`/real-time/${primary}`, params, cacheKey, LIVE_TTL);
-    if (!data) continue;
+    if (!data) {
+      logger.warn(`getLiveQuotes: batch ${i / BATCH + 1} returned null (primary: ${primary})`);
+      continue;
+    }
 
     // EODHD returns array for multi, plain object for single
     const items = Array.isArray(data) ? data : [data];
@@ -119,6 +122,7 @@ async function getLiveQuotes(symbols) {
     }
   }
 
+  logger.info(`getLiveQuotes: ${Object.keys(result).length}/${symbols.length} symbols resolved`);
   return result;
 }
 
@@ -162,7 +166,21 @@ async function getLiveIndex(indexSymbol) {
 async function getTopMovers(watchlist, minChangePct = 1.0, topN = 10) {
   const quotes = await getLiveQuotes(watchlist);
 
-  const movers = Object.values(quotes)
+  const allQuotes = Object.values(quotes);
+  const withPrice = allQuotes.filter(q => q.price > 0);
+  const withVol   = allQuotes.filter(q => q.volume > 0);
+
+  // Log sample quotes so we can verify live data is flowing
+  const sample = allQuotes.slice(0, 5).map(q =>
+    `${q.symbol}:${q.changePct >= 0 ? "+" : ""}${q.changePct}% (vol:${q.volume})`
+  ).join(" | ");
+  logger.info(
+    `getTopMovers [watchlist check]: ${allQuotes.length}/${watchlist.length} quotes received ` +
+    `| ${withPrice.length} have price | ${withVol.length} have volume ` +
+    `| sample → ${sample || "none"}`
+  );
+
+  const movers = allQuotes
     .filter(q => q.changePct >= minChangePct && q.volume > 0)
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, topN);
