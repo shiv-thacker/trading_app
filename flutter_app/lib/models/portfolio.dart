@@ -167,6 +167,10 @@ class Portfolio {
   final double totalValueINR;
   /// Live USD/INR rate (updated each cycle from EODHD)
   final double usdInrRate;
+  /// Live EUR/INR rate (for XETRA positions)
+  final double eurInrRate;
+  /// Live JPY/INR rate (for Japan TSE positions)
+  final double jpyInrRate;
   /// True if this portfolio doc came from global_swing_portfolio
   final bool isGlobal;
 
@@ -179,6 +183,8 @@ class Portfolio {
     this.capitalINR    = 0,
     this.totalValueINR = 0,
     this.usdInrRate    = 84.0,
+    this.eurInrRate    = 90.0,
+    this.jpyInrRate    = 0.58,
     this.isGlobal      = false,
   });
 
@@ -191,6 +197,16 @@ class Portfolio {
       startingCapital > 0 ? (totalPnl / startingCapital) * 100 : 0;
 
   bool get isProfit => totalPnl >= 0;
+
+  /// Returns the INR value of 1 unit of the given currency using live rates.
+  double fxRateFor(String currency) {
+    switch (currency) {
+      case 'INR': return 1.0;
+      case 'EUR': return eurInrRate > 0 ? eurInrRate : 90.0;
+      case 'JPY': return jpyInrRate > 0 ? jpyInrRate : 0.58;
+      default:    return usdInrRate > 0 ? usdInrRate : 84.0; // USD + unknown
+    }
+  }
 
   double get _fxRate => usdInrRate > 0 ? usdInrRate : 84.0;
 
@@ -212,11 +228,10 @@ class Portfolio {
     return availableCashINR + holdingsValueINR;
   }
 
-  /// Current market value of all open positions in INR
+  /// Current market value of all open positions in INR (correct per-currency FX)
   double get holdingsValueINR {
     return holdings.fold(0.0, (acc, h) {
-      final posValue = h.currentValue;
-      return acc + (h.currency == 'INR' ? posValue : posValue * _fxRate);
+      return acc + h.currentValue * fxRateFor(h.currency);
     });
   }
 
@@ -249,7 +264,9 @@ class Portfolio {
       lastUpdated = DateTime.now();
     }
 
-    final usdInrRate = (d['usdInrRate'] as num?)?.toDouble() ?? 84.0;
+    final usdInrRate     = (d['usdInrRate'] as num?)?.toDouble() ?? 84.0;
+    final eurInrRate     = (d['eurInrRate'] as num?)?.toDouble() ?? 90.0;
+    final jpyInrRate     = (d['jpyInrRate'] as num?)?.toDouble() ?? 0.58;
     final startingCapital =
         (d['startingCapital'] as num?)?.toDouble() ?? 100000;
 
@@ -259,7 +276,11 @@ class Portfolio {
         d.containsKey('baseCurrency');
 
     final resolvedCapitalINR = _resolveCapitalINR(d, isGlobal, startingCapital, usdInrRate);
-    final holdingsValue = _holdingsValueINR(holdings, usdInrRate);
+    final holdingsValue = _holdingsValueINR(
+      holdings, usdInrRate,
+      eurInrRate: eurInrRate,
+      jpyInrRate: jpyInrRate,
+    );
     final resolvedTotalValueINR =
         _resolveTotalValueINR(d, isGlobal, resolvedCapitalINR, holdingsValue);
 
@@ -272,16 +293,27 @@ class Portfolio {
       capitalINR:      resolvedCapitalINR,
       totalValueINR:   resolvedTotalValueINR,
       usdInrRate:      usdInrRate,
+      eurInrRate:      eurInrRate,
+      jpyInrRate:      jpyInrRate,
       isGlobal:        isGlobal,
     );
   }
 
-  static double _holdingsValueINR(List<Holding> holdings, double usdInrRate) {
-    final rate = usdInrRate > 0 ? usdInrRate : 84.0;
-    return holdings.fold(0.0, (acc, h) {
-      final posValue = h.currentValue;
-      return acc + (h.currency == 'INR' ? posValue : posValue * rate);
-    });
+  static double _holdingsValueINR(
+    List<Holding> holdings,
+    double usdInrRate, {
+    double eurInrRate = 90.0,
+    double jpyInrRate = 0.58,
+  }) {
+    double rateFor(String c) {
+      switch (c) {
+        case 'INR': return 1.0;
+        case 'EUR': return eurInrRate > 0 ? eurInrRate : 90.0;
+        case 'JPY': return jpyInrRate > 0 ? jpyInrRate : 0.58;
+        default:    return usdInrRate > 0 ? usdInrRate : 84.0;
+      }
+    }
+    return holdings.fold(0.0, (acc, h) => acc + h.currentValue * rateFor(h.currency));
   }
 
   /// Migrate legacy cash / dual-wallet fields into unified capitalINR
@@ -335,6 +367,8 @@ class Portfolio {
     capitalINR:      100000,
     totalValueINR:   100000,
     usdInrRate:      84.0,
+    eurInrRate:      90.0,
+    jpyInrRate:      0.58,
     isGlobal:        true,
   );
 }

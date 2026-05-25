@@ -32,11 +32,17 @@
 const logger = require("firebase-functions/logger");
 
 // ── Data layer ────────────────────────────────────────────────
-const { getLiveQuotes, getTopMovers, getLiveUsdInrRate } = require("./data/eodhd_live");
+const { getLiveQuotes, getTopMovers, getLiveUsdInrRate, getLiveAllFxRates } = require("./data/eodhd_live");
 const { getBatchHistoricalCandles }         = require("./data/eodhd_history");
 const { getNSELivePrices, getNSEBroadMovers } = require("./data/nse_live");
 const { getDynamicTopMovers }               = require("./data/eodhd_screener");
 const { clearEohdCache }                    = require("./data/eodhd_client");
+// Japan uses Yahoo Finance — EODHD $29.99 plan does not cover TSE individual stocks
+const {
+  getJapanBroadMovers,
+  getJapanBatchHistoricalCandles,
+  getJapanLiveQuote,
+} = require("./data/yahoo_japan");
 
 // ── Analysis layer ────────────────────────────────────────────
 const {
@@ -83,9 +89,11 @@ async function runGlobalSwingCycle() {
   try {
     portfolio = await getPortfolioState();
 
-    // Update to live FX rate every cycle (non-fatal if it fails)
-    const liveRate = await getLiveUsdInrRate();
-    portfolio.usdInrRate = liveRate;
+    // Update all live FX rates every cycle (non-fatal if any fail)
+    const fxRates = await getLiveAllFxRates();
+    portfolio.usdInrRate = fxRates.USD;
+    portfolio.eurInrRate = fxRates.EUR;
+    portfolio.jpyInrRate = fxRates.JPY;
 
     logger.info(
       `Portfolio: ₹${(portfolio.capitalINR || 0).toFixed(0)} available | ` +
@@ -127,17 +135,17 @@ async function runGlobalSwingCycle() {
   // ── ③ Live prices for current holdings ──────────────────────
   if (portfolio.holdings.length > 0) {
     try {
-      const holdSymbols   = portfolio.holdings.map(h => h.symbol);
-      const indiaSymbols  = holdSymbols.filter(s => s.endsWith(".NSE"));
-      const foreignSymbols = holdSymbols.filter(s => !s.endsWith(".NSE"));
+      const holdSymbols    = portfolio.holdings.map(h => h.symbol);
+      const indiaSymbols   = holdSymbols.filter(s => s.endsWith(".NSE"));
+      const japanSymbols   = holdSymbols.filter(s => s.endsWith(".T"));
+      const eohdSymbols    = holdSymbols.filter(s => !s.endsWith(".NSE") && !s.endsWith(".T"));
 
       let priceMap = {};
 
-      // India: try NSE (real-time), fall back to EODHD (delayed)
+      // India: NSE free API (real-time), EODHD as fallback
       if (indiaSymbols.length > 0) {
         const nsePrices = await getNSELivePrices(indiaSymbols);
         Object.assign(priceMap, nsePrices);
-        // EODHD fallback for any symbols NSE didn't return
         const missing = indiaSymbols.filter(s => !priceMap[s]);
         if (missing.length > 0) {
           const eohdFallback = await getLiveQuotes(missing);
@@ -147,16 +155,26 @@ async function runGlobalSwingCycle() {
         }
       }
 
-      // Foreign (US / Germany / Japan): always EODHD
-      if (foreignSymbols.length > 0) {
-        const foreignPrices = await getLiveQuotes(foreignSymbols);
+      // Japan: Yahoo Finance (EODHD does not cover TSE stocks)
+      if (japanSymbols.length > 0) {
+        const settled = await Promise.allSettled(japanSymbols.map(sym => getJapanLiveQuote(sym)));
+        for (const r of settled) {
+          if (r.status === "fulfilled" && r.value && r.value.price > 0) {
+            priceMap[r.value.symbol] = r.value.price;
+          }
+        }
+      }
+
+      // US / Germany: EODHD real-time
+      if (eohdSymbols.length > 0) {
+        const foreignPrices = await getLiveQuotes(eohdSymbols);
         for (const [sym, q] of Object.entries(foreignPrices)) {
           priceMap[sym] = q.price;
         }
       }
 
       portfolio.holdings = updateHoldingsPnL(
-        portfolio.holdings, priceMap, portfolio.usdInrRate || 84.0
+        portfolio.holdings, priceMap, portfolio.usdInrRate || 84.0, portfolio
       );
       logger.info(`Updated prices for ${Object.keys(priceMap).length}/${holdSymbols.length} holdings`);
 
@@ -219,13 +237,21 @@ async function runGlobalSwingCycle() {
           logger.warn("NSE broad scan returned 0 — falling back to watchlist");
           movers = await getTopMovers(market.watchlist, R.MIN_CHANGE_PCT, 15);
         }
+
+      } else if (mood.marketCode === "T") {
+        // ── Japan: Yahoo Finance (EODHD plan does NOT cover TSE stocks) ──
+        // N225.INDX works on EODHD for market mood, but individual stock data
+        // (real-time and EOD) returns "NA"/"Ticker Not Found" on the $29.99 plan.
+        movers = await getJapanBroadMovers(market.watchlist, R.MIN_CHANGE_PCT, 25);
+        logger.info(`🇯🇵 Japan: ${movers.length} movers from Yahoo Finance`);
+
       } else {
-        // ── US / Germany / Japan: EODHD Screener (full exchange) ──
+        // ── US / Germany: EODHD Screener (full exchange) ──────────
         movers = await getDynamicTopMovers(mood.marketCode, R.MIN_CHANGE_PCT, 25);
 
         if (movers.length === 0) {
           // Fallback: screener unavailable → use expanded watchlist
-          // Use minChangePct=0.3 for fallback so delayed EODHD data still surfaces movers
+          // Use minChangePct=0.3 so delayed EODHD data still surfaces movers
           logger.warn(`${mood.marketCode} screener returned 0 — falling back to watchlist`);
           movers = await getTopMovers(market.watchlist, 0.3, 15);
         }
@@ -239,7 +265,14 @@ async function runGlobalSwingCycle() {
       );
 
       // Fetch 30-day OHLCV for candidates (needed for technical indicators)
-      const candleMap = await getBatchHistoricalCandles(movers.map(m => m.symbol));
+      // Japan uses Yahoo Finance; all other markets use EODHD.
+      const japanSymbols  = movers.map(m => m.symbol).filter(s => s.endsWith(".T"));
+      const eohdSymbols   = movers.map(m => m.symbol).filter(s => !s.endsWith(".T"));
+      const [japanCandles, eohdCandles] = await Promise.all([
+        japanSymbols.length > 0 ? getJapanBatchHistoricalCandles(japanSymbols) : Promise.resolve({}),
+        eohdSymbols.length  > 0 ? getBatchHistoricalCandles(eohdSymbols)       : Promise.resolve({}),
+      ]);
+      const candleMap = { ...japanCandles, ...eohdCandles };
 
       const withIndicators = movers.map(m => ({
         ...m,
@@ -296,11 +329,18 @@ async function runGlobalSwingCycle() {
 
   if (portfolio.holdings.length > 0) {
     try {
-      const holdSymbols = portfolio.holdings.map(h => h.symbol);
-      const candleMap   = await getBatchHistoricalCandles(holdSymbols);
+      const holdSymbols  = portfolio.holdings.map(h => h.symbol);
+      const holdJapan    = holdSymbols.filter(s => s.endsWith(".T"));
+      const holdEohd     = holdSymbols.filter(s => !s.endsWith(".T"));
+
+      const [japanMap, eohdMap] = await Promise.all([
+        holdJapan.length > 0 ? getJapanBatchHistoricalCandles(holdJapan) : Promise.resolve({}),
+        holdEohd.length  > 0 ? getBatchHistoricalCandles(holdEohd)       : Promise.resolve({}),
+      ]);
+      const candleMap = { ...japanMap, ...eohdMap };
 
       for (const h of portfolio.holdings) {
-        const candles   = candleMap[h.symbol] || [];
+        const candles = candleMap[h.symbol] || [];
         holdingsWithHistory[h.symbol] = {
           candles,
           indicators: computeIndicators(candles, 0),

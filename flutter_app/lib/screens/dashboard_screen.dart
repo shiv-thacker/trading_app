@@ -296,7 +296,7 @@ class _PortfolioValueSection extends StatelessWidget {
           if (showWallets) ...[
             const SizedBox(height: 4),
             Text(
-              '🌐 Unified pool · USD/INR ₹${portfolio.usdInrRate.toStringAsFixed(1)} live rate',
+              '🌐 USD ₹${portfolio.usdInrRate.toStringAsFixed(1)} · EUR ₹${portfolio.eurInrRate.toStringAsFixed(1)} · JPY ₹${portfolio.jpyInrRate.toStringAsFixed(4)}',
               style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
             ),
           ],

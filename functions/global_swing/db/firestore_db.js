@@ -40,6 +40,8 @@ const DEFAULT_PORTFOLIO = {
   startingCapital:   100000,   // ₹1,00,000 total capital
   capitalINR:        100000,   // Available cash in ₹ (unified pool — all markets)
   usdInrRate:        84.0,     // Live USD/INR rate — updated each cycle from EODHD
+  eurInrRate:        90.0,     // Live EUR/INR rate — for XETRA positions
+  jpyInrRate:        0.58,     // Live JPY/INR rate — for Japan (TSE) positions
   totalValueINR:     100000,   // capitalINR + all open positions (recalculated every cycle)
   holdings:          [],
   recentSells:       [],       // Tracks recently sold symbols (for NO_REBUY_DAYS rule)
@@ -279,17 +281,34 @@ async function recordAILog(logData) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Returns the INR equivalent of an amount in a given currency.
+ * Supports INR, USD, EUR, JPY using live rates stored in portfolio.
+ */
+function toINR(amount, currency, portfolio) {
+  if (currency === "INR") return amount;
+  if (currency === "USD") return amount * (portfolio.usdInrRate || 84.0);
+  if (currency === "EUR") return amount * (portfolio.eurInrRate || 90.0);
+  if (currency === "JPY") return amount * (portfolio.jpyInrRate || 0.58);
+  // Unknown currency: fall back to USD rate with a warning
+  return amount * (portfolio.usdInrRate || 84.0);
+}
+
+/**
  * Apply latest prices to holdings and update unrealised P&L.
- * Also converts P&L to INR for unified portfolio display.
+ * Uses per-currency FX rates (USD/EUR/JPY→INR) stored in portfolio.
  *
  * @param {Array}  holdings    - Current holdings array
- * @param {Object} priceMap    - { "TCS.NSE": 3520, "AAPL.US": 309.5, ... }
- * @param {number} usdInrRate  - Current exchange rate for conversion
+ * @param {Object} priceMap    - { "TCS.NSE": 3520, "AAPL.US": 309.5, "7203.T": 3026 }
+ * @param {number} usdInrRate  - Kept for backward-compat; prefer portfolio object
+ * @param {Object} [portfolio] - Full portfolio (for EUR/JPY rates); optional
  * @returns {Array}            - Updated holdings array
  */
-function updateHoldingsPnL(holdings, priceMap, usdInrRate = 84.0) {
+function updateHoldingsPnL(holdings, priceMap, usdInrRate = 84.0, portfolio = null) {
   if (!holdings || holdings.length === 0) return [];
   if (!priceMap || Object.keys(priceMap).length === 0) return holdings;
+
+  // Build a minimal portfolio-like object if full portfolio not passed
+  const fxContext = portfolio || { usdInrRate, eurInrRate: 90.0, jpyInrRate: 0.58 };
 
   return holdings.map(h => {
     const latest = priceMap[h.symbol];
@@ -297,9 +316,7 @@ function updateHoldingsPnL(holdings, priceMap, usdInrRate = 84.0) {
 
     const unrealizedPnl    = (latest - h.avgBuyPrice) * h.quantity;
     const unrealizedPnlPct = ((latest - h.avgBuyPrice) / h.avgBuyPrice) * 100;
-    const unrealizedPnlINR = h.currency === "INR"
-      ? unrealizedPnl
-      : unrealizedPnl * usdInrRate;
+    const unrealizedPnlINR = toINR(unrealizedPnl, h.currency || "USD", fxContext);
 
     return {
       ...h,
@@ -319,13 +336,13 @@ function updateHoldingsPnL(holdings, priceMap, usdInrRate = 84.0) {
  * @returns {number}         - Total value in INR
  */
 function calcTotalValueINR(portfolio) {
-  const { capitalINR = 0, usdInrRate = 84.0, holdings = [] } = portfolio;
+  const { capitalINR = 0, holdings = [] } = portfolio;
 
   let total = capitalINR;
 
   for (const h of holdings) {
     const posValue = (h.currentPrice || h.avgBuyPrice) * h.quantity;
-    const posINR   = h.currency === "INR" ? posValue : posValue * usdInrRate;
+    const posINR   = toINR(posValue, h.currency || "USD", portfolio);
     total += posINR;
   }
 
@@ -340,4 +357,5 @@ module.exports = {
   recordAILog,
   updateHoldingsPnL,
   calcTotalValueINR,
+  toINR,
 };

@@ -41,26 +41,55 @@ const MARKET_SENTIMENT_PROXIES = {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Fetch all live FX rates needed for the global portfolio.
+ * Returns a map: { USD: 95.22, EUR: 110.89, JPY: 0.599 } (all vs INR).
+ *
+ * EODHD FOREX symbol format: "USDINR.FOREX", "EURINR.FOREX", "JPYINR.FOREX"
+ *
+ * @returns {Promise<Object>} { USD, EUR, JPY } — INR per 1 unit of each currency
+ */
+async function getLiveAllFxRates() {
+  const pairs = [
+    { key: "USD", symbol: "USDINR.FOREX", min: 50,    max: 150,  fallback: 84.0  },
+    { key: "EUR", symbol: "EURINR.FOREX", min: 80,    max: 150,  fallback: 90.0  },
+    { key: "JPY", symbol: "JPYINR.FOREX", min: 0.3,   max: 1.5,  fallback: 0.58  },
+  ];
+
+  const rates = {};
+  const settled = await Promise.allSettled(
+    pairs.map(p => eohdGet("/real-time/" + p.symbol, {}, "fx_" + p.key.toLowerCase(), FX_TTL))
+  );
+
+  for (let i = 0; i < pairs.length; i++) {
+    const p    = pairs[i];
+    const res  = settled[i];
+    let   rate = p.fallback;
+
+    if (res.status === "fulfilled" && res.value) {
+      const r = parseFloat(res.value.close || res.value.price || 0);
+      if (r >= p.min && r <= p.max) rate = Math.round(r * 10000) / 10000;
+    }
+
+    rates[p.key] = rate;
+  }
+
+  logger.info(`Live FX rates: USD/INR ₹${rates.USD} | EUR/INR ₹${rates.EUR} | JPY/INR ₹${rates.JPY}`);
+  return rates;
+}
+
+/**
  * Fetch live USD/INR exchange rate from EODHD FOREX endpoint.
  * Falls back to a safe default if the API call fails.
+ * (Kept for backward-compatibility — prefer getLiveAllFxRates for new code.)
  *
- * EODHD FOREX symbol format: "USDINR.FOREX"
- * Returns the current bid/ask mid price.
- *
- * @returns {Promise<number>} e.g. 84.21
+ * @returns {Promise<number>} e.g. 95.22
  */
 async function getLiveUsdInrRate() {
   try {
-    const data = await eohdGet(
-      "/real-time/USDINR.FOREX",
-      {},
-      "fx_usdinr",
-      FX_TTL
-    );
-
+    const data = await eohdGet("/real-time/USDINR.FOREX", {}, "fx_usd", FX_TTL);
     if (data && (data.close || data.price)) {
       const rate = parseFloat(data.close || data.price);
-      if (rate > 50 && rate < 150) {   // sanity check — ₹50–₹150 per $
+      if (rate > 50 && rate < 150) {
         logger.info(`Live USD/INR rate: ₹${rate.toFixed(2)}`);
         return Math.round(rate * 100) / 100;
       }
@@ -68,8 +97,6 @@ async function getLiveUsdInrRate() {
   } catch (err) {
     logger.warn("USD/INR rate fetch failed — using default 84.0:", err.message);
   }
-
-  // Safe fallback (close to real rate, avoids startup errors)
   return 84.0;
 }
 
@@ -180,8 +207,12 @@ async function getTopMovers(watchlist, minChangePct = 1.0, topN = 10) {
     `| sample → ${sample || "none"}`
   );
 
+  // Filter by price > 0, NOT volume > 0.
+  // EODHD real-time for non-US markets (XETRA, TSE) returns intraday partial-day
+  // volume or zero, which silently drops all valid stocks. Volume is verified
+  // downstream via historical 20d avg in computeIndicators.
   const movers = allQuotes
-    .filter(q => q.changePct >= minChangePct && q.volume > 0)
+    .filter(q => q.changePct >= minChangePct && q.price > 0)
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, topN);
 
@@ -270,6 +301,7 @@ module.exports = {
   getLiveIndex,
   getTopMovers,
   getLiveUsdInrRate,
+  getLiveAllFxRates,
   getAllMarketSentiments,
   MARKET_SENTIMENT_PROXIES,
 };

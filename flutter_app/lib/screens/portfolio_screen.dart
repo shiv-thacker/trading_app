@@ -335,7 +335,9 @@ class _StatsSummary extends StatelessWidget {
           const Divider(color: Color(0x14FFFFFF), height: 20),
           if (showWallets) ...[
             _StatRow('Available Capital', portfolio.availableCashINR, bold: true),
-            _StatRow('  USD/INR rate', portfolio.usdInrRate, isRate: true),
+            _StatRow('  USD/INR rate', portfolio.usdInrRate, isRate: true, rateSymbol: '\$'),
+            _StatRow('  EUR/INR rate', portfolio.eurInrRate, isRate: true, rateSymbol: '€'),
+            _StatRow('  JPY/INR rate', portfolio.jpyInrRate, isRate: true, rateSymbol: '¥', decimals: 4),
           ] else
             _StatRow('Available Cash', portfolio.cash),
           _StatRow('Invested in stocks', portfolio.investedValueINR),
@@ -352,16 +354,20 @@ class _StatRow extends StatelessWidget {
   final bool? isProfit;
   final bool showSign;
   final bool bold;
-  final bool isForeign; // USD value
-  final bool isRate;    // Exchange rate — show as "₹84.20/$"
+  final bool isForeign;     // USD value
+  final bool isRate;        // Exchange rate — show as "₹XX/[sym]"
+  final String rateSymbol;  // Currency symbol shown after the rate (default '\$')
+  final int decimals;       // Decimal places for rate display (default 2)
 
   const _StatRow(this.label, this.value, {
-    this.highlight = false,
+    this.highlight  = false,
     this.isProfit,
-    this.showSign = false,
-    this.bold = false,
-    this.isForeign = false,
-    this.isRate = false,
+    this.showSign   = false,
+    this.bold       = false,
+    this.isForeign  = false,
+    this.isRate     = false,
+    this.rateSymbol = '\$',
+    this.decimals   = 2,
   });
 
   @override
@@ -377,7 +383,7 @@ class _StatRow extends StatelessWidget {
     final inrFmt    = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
     final usdFmt    = NumberFormat.currency(locale: 'en_US', symbol: '\$', decimalDigits: 2);
     final formatted = isRate
-        ? '₹${value.toStringAsFixed(2)}/\$'
+        ? '₹${value.toStringAsFixed(decimals)}/$rateSymbol'
         : isForeign
             ? '$prefix${usdFmt.format(value)}'
             : '$prefix${inrFmt.format(value)}';
@@ -443,12 +449,9 @@ class _AllocationPieChartState extends State<_AllocationPieChart> {
     ));
 
     final totalForPct = portfolio.displayValueINR;
-    final fxRate = portfolio.usdInrRate > 0 ? portfolio.usdInrRate : 83.5;
     for (int i = 0; i < portfolio.holdings.length; i++) {
-      final h   = portfolio.holdings[i];
-      final hValueINR = h.currency == 'INR'
-          ? h.currentValue
-          : h.currentValue * fxRate;
+      final h         = portfolio.holdings[i];
+      final hValueINR = h.currentValue * portfolio.fxRateFor(h.currency);
       final pct = totalForPct > 0
           ? (hValueINR / totalForPct * 100)
           : 0.0;

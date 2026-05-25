@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Global Swing AI Logs Exporter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f766e 0%, #134e4a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .date-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .date-input:focus {
+            outline: none;
+            border-color: #0f766e;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #0f766e 0%, #134e4a 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(15, 118, 110, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .help {
+            background: #f0fdfa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #666;
+            border: 1px solid #99f6e4;
+        }
+
+        .help strong {
+            color: #134e4a;
+        }
+
+        code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .fields {
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌍 Global Swing AI Logs Exporter</h1>
+        <p class="subtitle">Export ARJUN global swing cycle logs from <code>global_swing_ai_logs</code></p>
+
+        <div class="help">
+            <strong>Your project details are already filled in!</strong><br>
+            Pick a start date and click Export. Downloads JSON with all fields per cycle.
+            <div class="fields">
+                Includes: <code>marketsAnalyzed</code>, <code>bullishMarkets</code>, <code>openMarkets</code>,
+                <code>cycleStatus</code>, <code>thoughts</code>, <code>marketAnalysis</code>, and more.
+            </div>
+        </div>
+
+        <label for="projectId">Project ID</label>
+        <input
+            type="text"
+            id="projectId"
+            class="date-input"
+            value="trading-app-4ab30"
+            readonly
+            style="background: #f0f0f0;"
+        />
+
+        <label for="apiKey">API Key</label>
+        <input
+            type="text"
+            id="apiKey"
+            class="date-input"
+            value="AIzaSyDXnlEOZMFpIoJAjTSjRUEyjIfp31gCV7c"
+            readonly
+            style="background: #f0f0f0;"
+        />
+
+        <label for="startDate">Export from date:</label>
+        <input
+            type="datetime-local"
+            id="startDate"
+            class="date-input"
+            value="2026-05-18T00:00"
+        />
+
+        <button id="exportBtn" onclick="exportData()">
+            📥 Export Global Swing AI Logs
+        </button>
+
+        <div id="status" class="status"></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+        import { getFirestore, collection, query, where, orderBy, getDocs } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+
+        async function exportData() {
+            const exportBtn = document.getElementById('exportBtn');
+
+            const projectId = document.getElementById('projectId').value.trim();
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const startDateInput = document.getElementById('startDate').value;
+
+            if (!projectId || !apiKey) {
+                showStatus('Missing project configuration', 'error');
+                return;
+            }
+
+            if (!startDateInput) {
+                showStatus('Please select a start date', 'error');
+                return;
+            }
+
+            try {
+                exportBtn.disabled = true;
+                exportBtn.textContent = '⏳ Connecting to Firebase...';
+
+                const firebaseConfig = {
+                    apiKey: apiKey,
+                    authDomain: `${projectId}.firebaseapp.com`,
+                    projectId: projectId,
+                    storageBucket: `${projectId}.firebasestorage.app`
+                };
+
+                const app = initializeApp(firebaseConfig);
+                const db = getFirestore(app);
+
+                showStatus('Connected! Fetching global_swing_ai_logs...', 'info');
+                exportBtn.textContent = '⏳ Fetching data...';
+
+                const startDate = new Date(startDateInput).getTime();
+
+                const q = query(
+                    collection(db, 'global_swing_ai_logs'),
+                    where('timestampMs', '>=', startDate),
+                    orderBy('timestampMs', 'asc')
+                );
+
+                const querySnapshot = await getDocs(q);
+
+                const logs = [];
+                querySnapshot.forEach((doc) => {
+                    logs.push({
+                        id: doc.id,
+                        ...doc.data()
+                    });
+                });
+
+                if (logs.length === 0) {
+                    showStatus('No entries found from the selected date', 'error');
+                    exportBtn.disabled = false;
+                    exportBtn.textContent = '📥 Export Global Swing AI Logs';
+                    return;
+                }
+
+                const dataStr = JSON.stringify(logs, null, 2);
+                const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+
+                const dateStr = new Date(startDateInput).toISOString().split('T')[0];
+                link.download = `global_swing_ai_logs_from_${dateStr}.json`;
+                link.click();
+                URL.revokeObjectURL(url);
+
+                showStatus(`✅ Success! Downloaded ${logs.length} global swing AI log entries`, 'success');
+                exportBtn.textContent = '✅ Export Complete!';
+
+                setTimeout(() => {
+                    exportBtn.disabled = false;
+                    exportBtn.textContent = '📥 Export Global Swing AI Logs';
+                }, 3000);
+
+            } catch (error) {
+                console.error('Error:', error);
+                let message = error.message;
+                if (message.includes('index')) {
+                    message += ' — You may need a Firestore composite index for timestampMs. Check the browser console link.';
+                }
+                showStatus(`❌ Error: ${message}`, 'error');
+                exportBtn.disabled = false;
+                exportBtn.textContent = '📥 Export Global Swing AI Logs';
+            }
+        }
+
+        window.exportData = exportData;
+
+        function showStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            statusEl.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

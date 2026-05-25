@@ -133,8 +133,24 @@ function computeIndicators(candles, todayVolume = 0) {
     : 0;
 
   // Volume ratio: today vs 20d average (>1.3 = institutional interest)
-  const volumeRatio = avgVolume20d > 0 && todayVolume > 0
-    ? Math.round((todayVolume / avgVolume20d) * 100) / 100
+  //
+  // EODHD real-time (/real-time/{symbol}) for non-US markets (XETRA, TSE)
+  // returns intraday cumulative volume — only what has traded so far today.
+  // Comparing partial-day intraday volume against full-day historical average
+  // always produces ratios like 0.0x–0.2x, even on genuinely high-volume days.
+  //
+  // Fix: if todayVolume is zero or looks like partial-day data (< 10% of the
+  // 20d average), fall back to the most recent historical EOD candle's volume.
+  // This gives a realistic "yesterday vs average" ratio and lets real candidates
+  // through, especially for Germany (XETRA) and Japan (T).
+  const latestHistVol = volumes[volumes.length - 1] || 0;
+  const effectiveVolume =
+    todayVolume > 0 && avgVolume20d > 0 && todayVolume >= avgVolume20d * 0.10
+      ? todayVolume       // live intraday volume looks credible — use it
+      : latestHistVol;    // partial/zero live volume — use last EOD candle as proxy
+
+  const volumeRatio = avgVolume20d > 0 && effectiveVolume > 0
+    ? Math.round((effectiveVolume / avgVolume20d) * 100) / 100
     : 0;
 
   // ── 10-day support (lowest close = where buyers stepped in) ─

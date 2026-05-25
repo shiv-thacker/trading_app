@@ -21,6 +21,7 @@
  */
 
 const R      = require("../config/trading_rules");
+const { toINR } = require("../db/firestore_db");
 const logger = require("firebase-functions/logger");
 
 /**
@@ -67,10 +68,7 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
   }
 
   // ⑤ Cash reserve check (unified INR pool) ──────────────────
-  const isINR    = trade.currency === "INR";
-  const tradeINR = isINR
-    ? trade.totalAmount
-    : trade.totalAmount * usdInrRate;
+  const tradeINR   = toINR(trade.totalAmount, trade.currency || "USD", portfolio);
   const reserveINR = R.MIN_CASH_RESERVE_INR;  // always keep ₹2,000 minimum
 
   if (capitalINR - tradeINR < reserveINR) {

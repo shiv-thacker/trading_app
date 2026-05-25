@@ -28,7 +28,7 @@
  *   SWING_TIME_STOP    → Exit due to time-stop (dead money rule)
  */
 
-const { recordTrade } = require("../db/firestore_db");
+const { recordTrade, toINR } = require("../db/firestore_db");
 const R               = require("../config/trading_rules");
 const logger          = require("firebase-functions/logger");
 
@@ -77,10 +77,8 @@ async function executeBuy(trade, portfolio, mood = "NEUTRAL") {
   }
 
   // ── PAPER MODE ───────────────────────────────────────────────
-  const isINR     = trade.currency === "INR";
-  const fxRate    = portfolio.usdInrRate || 84.0;
-  // Deduct from unified INR pool (convert foreign amounts at live rate)
-  const costINR   = isINR ? trade.totalAmount : trade.totalAmount * fxRate;
+  // Deduct from unified INR pool using the correct per-currency FX rate
+  const costINR = toINR(trade.totalAmount, trade.currency || "USD", portfolio);
   portfolio.capitalINR = (portfolio.capitalINR || 0) - costINR;
 
   portfolio.holdings.push({
@@ -138,21 +136,20 @@ async function executeSell(trade, portfolio, usdInrRate = 83.5) {
 
   const sellQty   = trade.quantity;
   const sellPrice = trade.price;
-  const isINR     = holding.currency === "INR";
 
-  // P&L in position's currency
+  // P&L in position's native currency
   const pnl    = (sellPrice - holding.avgBuyPrice) * sellQty;
   const pnlPct = ((sellPrice - holding.avgBuyPrice) / holding.avgBuyPrice) * 100;
-  // P&L in INR (for unified reporting)
-  const pnlINR = isINR ? pnl : pnl * usdInrRate;
+  // P&L in INR using correct per-currency FX rate
+  const pnlINR = toINR(pnl, holding.currency || "USD", portfolio);
 
   const daysHeld = Math.floor(
     (Date.now() - (holding.buyTimestamp || Date.now())) / (1000 * 60 * 60 * 24)
   );
 
-  // Add proceeds back to unified INR pool (convert at live rate)
+  // Add proceeds back to unified INR pool using correct FX rate
   const proceeds    = sellPrice * sellQty;
-  const proceedsINR = isINR ? proceeds : proceeds * usdInrRate;
+  const proceedsINR = toINR(proceeds, holding.currency || "USD", portfolio);
   portfolio.capitalINR = (portfolio.capitalINR || 0) + proceedsINR;
 
   if (sellQty >= holding.quantity) {

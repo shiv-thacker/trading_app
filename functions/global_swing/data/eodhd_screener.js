@@ -121,8 +121,12 @@ async function getDynamicTopMovers(marketCode, minChangePct = 1.0, topN = 20) {
   }
 
   // ── Step 3: Filter + rank by today's live % change ───────────────────────
+  // Note: filter by price > 0, NOT volume > 0.
+  // EODHD real-time for non-US markets (XETRA, TSE) often returns intraday
+  // partial-day volume or zero, making volume > 0 silently drop valid stocks.
+  // Volume quality is verified downstream via historical 20d avg in computeIndicators.
   const movers = Object.values(quotes)
-    .filter(q => q.changePct >= minChangePct && q.volume > 0)
+    .filter(q => q.changePct >= minChangePct && q.price > 0)
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, topN);
 
@@ -158,11 +162,14 @@ async function _fetchScreenerUniverse(cfg) {
     `sort=change_p.desc | limit=${cfg.universeSize}`
   );
 
+  // Correct EODHD screener sort field: "refund_1d_p" (not "change_p.desc" — that causes 422)
+  // order: "desc" = highest daily gainers first
   const data = await eohdGet(
     "/screener",
     {
       filters,
-      sort:   "change_p.desc",
+      sort:   "refund_1d_p",
+      order:  "desc",
       limit:  cfg.universeSize,
       offset: 0,
     },
