@@ -98,10 +98,21 @@ async function runGlobalSwingCycle() {
     logger.info(
       `Portfolio: ₹${(portfolio.capitalINR || 0).toFixed(0)} available | ` +
       `${portfolio.holdings?.length} holdings | ` +
-      `USD/INR: ₹${liveRate}`
+      `FX: USD ₹${fxRates.USD} | EUR ₹${fxRates.EUR} | JPY ₹${fxRates.JPY}`
     );
   } catch (err) {
     logger.error("Cannot read portfolio — aborting cycle:", err.message);
+    await recordAILog({
+      cycleStatus:     "ERROR",
+      tradeCount:      0,
+      marketsAnalyzed: [],
+      bullishMarkets:  [],
+      openMarkets:     [],
+      marketAnalysis:  `Portfolio/FX load failed: ${err.message}`,
+      thoughts:        [`Error: ${err.message}`],
+      portfolioHealth: "OK",
+      nextFocus:       "Fix backend error and retry manual trigger.",
+    }).catch(() => {});
     return { cycleStatus: "ERROR", error: err.message };
   }
 
