@@ -192,14 +192,22 @@ async function getAllMarketSentiments() {
 
   let rawData;
   try {
+    // EODHD sentiments endpoint: /api/sentiments?s=AAPL.US,MSFT.US&from=...&to=...
+    // Note: does NOT use /real-time prefix — it's a standalone endpoint.
     rawData = await eohdGet(
       "/sentiments",
-      { s: allSymbols.join(","), from: yesterday, to: today },
+      { s: allSymbols.join(","), from: yesterday, to: today, fmt: "json" },
       cacheKey,
       SENTIMENT_TTL
     );
   } catch (err) {
     logger.warn("Sentiment fetch failed (non-fatal):", err.message);
+    return {};
+  }
+
+  // 404 means endpoint not found (plan may not include it) — skip silently
+  if (!rawData) {
+    logger.info("Sentiment API returned no data — proceeding without sentiment");
     return {};
   }
 

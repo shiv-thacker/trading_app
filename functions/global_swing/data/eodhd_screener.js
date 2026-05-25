@@ -43,26 +43,32 @@ const SCREENER_TTL = 30 * 60 * 1000;  // 30-min cache — screener is EOD-update
 // minVolume:     Min shares/units traded — ensures stock is actively traded
 // universeSize:  How many stocks to fetch from screener (pre-live-quote step)
 //
+// IMPORTANT — EODHD screener exchange codes differ from symbol suffixes:
+//   Symbols use  : AAPL.US  | SAP.XETRA | 7203.T
+//   Screener uses: "US"     | "XETRA"   | "TSE"   ← Japan is "TSE" not "T"
+//
+// market_capitalization filter is in millions of USD.
+//
 const SCREENER_CONFIGS = {
   US: {
     exchange:     "US",
     suffix:       ".US",
-    minMarketCap: 2000,    // $2B+ — S&P 500 + major NASDAQ (avoids penny stocks)
-    minVolume:    500000,  // 500k shares minimum — ensures liquidity
-    universeSize: 80,      // Get top 80 candidates; live quotes will re-rank them
+    minMarketCap: 2000,    // $2B+ — filters out micro/small caps
+    minVolume:    500000,  // 500k shares minimum
+    universeSize: 80,
   },
   XETRA: {
     exchange:     "XETRA",
     suffix:       ".XETRA",
-    minMarketCap: 200,     // €200M+ — DAX + MDAX range
-    minVolume:    10000,   // European share volumes are lower than US
+    minMarketCap: 200,     // $200M+ — DAX + MDAX range
+    minVolume:    10000,   // European volumes are lower than US
     universeSize: 50,
   },
   T: {
-    exchange:     "T",
-    suffix:       ".T",
-    minMarketCap: 200,     // ¥200M+ equivalent — Nikkei range
-    minVolume:    50000,   // Tokyo share volumes
+    exchange:     "TSE",   // ← Tokyo Stock Exchange screener code is "TSE", not "T"
+    suffix:       ".T",    //   symbol suffix remains ".T" (e.g. 7203.T)
+    minMarketCap: 500,     // $500M+ — major Nikkei names
+    minVolume:    100000,  // Tokyo share volumes
     universeSize: 50,
   },
 };
@@ -88,13 +94,18 @@ async function getDynamicTopMovers(marketCode, minChangePct = 1.0, topN = 20) {
   let screenerSymbols;
   try {
     screenerSymbols = await _fetchScreenerUniverse(cfg);
+    logger.info(`Screener raw universe [${marketCode}]: ${screenerSymbols?.length ?? 0} symbols (exchange="${cfg.exchange}")`);
   } catch (err) {
     logger.warn(`Screener failed for ${marketCode} — falling back to watchlist: ${err.message}`);
     return [];
   }
 
   if (!screenerSymbols || screenerSymbols.length === 0) {
-    logger.info(`Screener returned 0 results for ${marketCode} — will use watchlist fallback`);
+    logger.warn(
+      `Screener [${marketCode}] returned 0 symbols — ` +
+      `possible cause: wrong exchange code ("${cfg.exchange}"), plan limit, or no stocks meet filters. ` +
+      `Falling back to watchlist.`
+    );
     return [];
   }
 
@@ -133,10 +144,12 @@ async function getDynamicTopMovers(marketCode, minChangePct = 1.0, topN = 20) {
 async function _fetchScreenerUniverse(cfg) {
   const cacheKey = `screener_${cfg.exchange}_${new Date().toISOString().split("T")[0]}`;
 
+  // EODHD screener requires filters as a JSON string in the query param.
+  // Numeric values must be numbers (not strings) to avoid 422 errors.
   const filters = JSON.stringify([
-    ["exchange",            "=",  cfg.exchange   ],
-    ["market_capitalization", ">", cfg.minMarketCap],
-    ["volume",              ">",  cfg.minVolume  ],
+    ["exchange",              "=",  cfg.exchange      ],
+    ["market_capitalization", ">",  cfg.minMarketCap  ],
+    ["volume",                ">",  cfg.minVolume     ],
   ]);
 
   const data = await eohdGet(
@@ -144,8 +157,8 @@ async function _fetchScreenerUniverse(cfg) {
     {
       filters,
       sort:   "change_p.desc",
-      limit:  cfg.universeSize,
-      offset: 0,
+      limit:  String(cfg.universeSize),
+      offset: "0",
     },
     cacheKey,
     SCREENER_TTL

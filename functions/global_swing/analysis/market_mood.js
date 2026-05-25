@@ -44,6 +44,11 @@ const logger                                  = require("firebase-functions/logg
  * Check if a given market (by code) is currently open.
  * Uses the exchange's local timezone and trading hours from markets.js.
  *
+ * Uses Intl.DateTimeFormat.formatToParts() — NOT toLocaleString() string parsing.
+ * toLocaleString() output format varies across Node.js versions and Linux ICU builds
+ * (e.g. "Mon, 09:30" vs "Mon 09:30"), causing unreliable comma-split parsing on GCP.
+ * formatToParts() returns named tokens directly, works on all runtimes.
+ *
  * @param {string} marketCode - "NSE" | "US" | "XETRA" | "T"
  * @returns {boolean}
  */
@@ -51,23 +56,22 @@ function isMarketOpen(marketCode) {
   const market = MARKETS[marketCode];
   if (!market) return false;
 
-  const now      = new Date();
-  const options  = {
+  const now       = new Date();
+  const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: market.timezone,
-    hour12:   false,
     weekday:  "short",
     hour:     "2-digit",
     minute:   "2-digit",
-  };
+    hour12:   false,
+  });
 
-  // toLocaleString in en-US with short weekday returns "Mon, 09:30"
-  const localStr = now.toLocaleString("en-US", options);
-  const parts    = localStr.split(", ");
-  const weekday  = parts[0];                             // "Mon"
-  const timePart = parts[1] || "00:00";
-  const [hStr, mStr] = timePart.split(":");
-  const localHour = parseInt(hStr, 10);
-  const localMin  = parseInt(mStr, 10);
+  // formatToParts gives unambiguous named tokens — no string parsing needed
+  const partsArr = formatter.formatToParts(now);
+  const get      = (type) => partsArr.find(p => p.type === type)?.value ?? "";
+
+  const weekday  = get("weekday");                      // "Mon" | "Sat" | "Sun" ...
+  const localHour = parseInt(get("hour"),   10);        // 0–23
+  const localMin  = parseInt(get("minute"), 10);        // 0–59
   const localMins = localHour * 60 + localMin;
 
   if (weekday === "Sat" || weekday === "Sun") return false;
@@ -75,7 +79,16 @@ function isMarketOpen(marketCode) {
   const [oh, om] = market.openTimeLocal.split(":").map(Number);
   const [ch, cm] = market.closeTimeLocal.split(":").map(Number);
 
-  return localMins >= (oh * 60 + om) && localMins < (ch * 60 + cm);
+  const isOpen = localMins >= (oh * 60 + om) && localMins < (ch * 60 + cm);
+
+  // Japan TSE has a lunch break 11:30–12:30 JST — no trading during that window
+  if (isOpen && marketCode === "T") {
+    const lunchStart = 11 * 60 + 30;
+    const lunchEnd   = 12 * 60 + 30;
+    if (localMins >= lunchStart && localMins < lunchEnd) return false;
+  }
+
+  return isOpen;
 }
 
 /**

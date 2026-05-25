@@ -248,6 +248,19 @@ async function runGlobalSwingCycle() {
       }));
 
       // Pre-filter before sending to Claude (reduces prompt size + noise)
+      // Log how many stocks each filter removes so we can diagnose "0 candidates" cycles
+      const tooOverbought = withIndicators.filter(s => s.indicators.rsi > R.MAX_RSI_ENTRY).length;
+      const fallingKnife  = withIndicators.filter(s => s.indicators.rsi < R.MIN_RSI_ENTRY).length;
+      const near52wHigh   = withIndicators.filter(s => s.indicators.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT).length;
+
+      logger.info(
+        `${mood.flag} ${mood.marketCode} filter breakdown: ` +
+        `${withIndicators.length} movers → ` +
+        `RSI overbought (>${R.MAX_RSI_ENTRY}): ${tooOverbought} removed, ` +
+        `RSI falling knife (<${R.MIN_RSI_ENTRY}): ${fallingKnife} removed, ` +
+        `near 52W high (<${R.MAX_52W_HIGH_DIST_PCT}%): ${near52wHigh} removed`
+      );
+
       const filtered = withIndicators.filter(s => {
         const ind = s.indicators;
         return (
@@ -263,6 +276,11 @@ async function runGlobalSwingCycle() {
         logger.info(
           `${mood.flag} ${mood.marketCode} candidates: ` +
           `${filtered.length} qualified → ${candidates[mood.marketCode].length} sent to Claude`
+        );
+      } else {
+        logger.warn(
+          `${mood.flag} ${mood.marketCode}: 0 candidates survived filters — ` +
+          `market may be overextended (stocks near 52W highs after strong rally)`
         );
       }
 

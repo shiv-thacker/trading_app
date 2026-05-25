@@ -92,8 +92,8 @@ async function eohdGet(path, params = {}, cacheKey = null, cacheTtlMs = 0) {
       lastErr = err;
       const status = err?.response?.status;
 
-      // Client errors (bad symbol, unauthorised) — no point retrying
-      if (status === 404 || status === 400 || status === 401 || status === 403) {
+      // Client errors (bad symbol, unauthorised, bad params) — no point retrying
+      if (status === 404 || status === 400 || status === 401 || status === 403 || status === 422) {
         logger.warn(`EODHD ${status} on ${path}: ${err.message}`);
         return null;
       }
