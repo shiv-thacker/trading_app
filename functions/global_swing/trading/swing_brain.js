@@ -81,7 +81,13 @@ ENTRY RULES (ALL must pass before proposing a BUY):
      Stocks near their 52W high have NOWHERE TO RUN. They will reverse.
      pctBelow52wHigh < ${R.MAX_52W_HIGH_DIST_PCT} = AUTOMATIC SKIP, no exceptions.
   5. Trend is UPTREND (EMA9 > EMA20, price > EMA9)
-  6. Volume ratio ≥ ${R.MIN_VOLUME_RATIO}x (big volume = real move, not a trap)
+  6. Volume ratio ≥ ${R.MIN_VOLUME_RATIO}x
+     IMPORTANT — volume data context for non-US markets:
+     For Japan (TSE) and Germany (XETRA), volumeRatio shows YESTERDAY's completed
+     EOD volume vs the 20-day average. A ratio of 0.8–1.2x means normal volume,
+     which is perfectly acceptable for swing entry. Do NOT reject Japan/Germany
+     stocks solely because volumeRatio is 0.8–1.1x — that is expected and healthy.
+     Only reject if volumeRatio < ${R.MIN_VOLUME_RATIO}x (genuinely thin trading).
 
 ═══════════════════════════════════════════════════════
 EXIT RULES (trigger SELL if ANY of these):

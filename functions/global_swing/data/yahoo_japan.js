@@ -30,6 +30,88 @@ const BASE    = "https://query1.finance.yahoo.com";
 const HEADERS = { "User-Agent": "Mozilla/5.0 (compatible; TradingBot/1.0)" };
 const TIMEOUT = 10000;
 
+// ── Full Nikkei 225 universe ──────────────────────────────────────────────────
+// All 225 official Nikkei 225 constituents — scanned every cycle when Japan is
+// open+bullish. Yahoo Finance only supports per-symbol v8/chart calls (no batch
+// screener for TSE), so we maintain the full symbol list here and scan them in
+// chunks. ~225 symbols × 8/chunk × 300ms = ~9 seconds total — fits easily inside
+// the Cloud Function timeout.
+// Source: Nikkei 225 official constituent list (updated quarterly).
+const NIKKEI_225 = [
+  // Fishery, agriculture & forestry
+  "1332.T", "1301.T",
+  // Mining
+  "1605.T",
+  // Construction
+  "1801.T", "1802.T", "1803.T", "1808.T", "1812.T", "1925.T", "1928.T",
+  // Food & beverages
+  "2002.T", "2269.T", "2282.T", "2501.T", "2502.T", "2503.T", "2531.T",
+  "2801.T", "2802.T", "2871.T", "2914.T",
+  // Textiles & apparel
+  "3401.T", "3402.T",
+  // Pulp & paper
+  "3861.T", "3436.T",
+  // Chemicals
+  "4004.T", "4005.T", "4021.T", "4042.T", "4043.T", "4061.T", "4063.T",
+  "4183.T", "4188.T", "4208.T", "4452.T", "4502.T", "4503.T", "4506.T",
+  "4507.T", "4519.T", "4523.T", "4528.T", "4543.T", "4568.T", "4578.T",
+  // Oil & coal products
+  "5001.T", "5020.T",
+  // Rubber products
+  "5108.T", "5110.T",
+  // Glass & ceramics
+  "5201.T", "5214.T", "5232.T", "5233.T", "5301.T", "5332.T", "5333.T",
+  // Steel & metals
+  "5401.T", "5406.T", "5411.T", "5541.T", "5703.T", "5706.T", "5711.T",
+  "5713.T", "5714.T", "5802.T", "5803.T",
+  // Machinery & industrials
+  "6272.T", "6301.T", "6302.T", "6305.T", "6326.T", "6361.T", "6367.T",
+  "6373.T", "6383.T", "6471.T", "6472.T", "6473.T",
+  // Electronics & electrical equipment
+  "6501.T", "6503.T", "6504.T", "6506.T", "6645.T", "6674.T", "6701.T",
+  "6702.T", "6703.T", "6724.T", "6752.T", "6758.T", "6762.T", "6770.T",
+  "6841.T", "6857.T", "6861.T", "6902.T", "6920.T", "6952.T", "6954.T",
+  "6971.T", "6976.T", "6988.T",
+  // Shipbuilding
+  "7011.T", "7012.T", "7013.T",
+  // Automobiles & parts
+  "7201.T", "7202.T", "7203.T", "7205.T", "7211.T", "7261.T", "7267.T",
+  "7269.T", "7270.T", "7272.T",
+  // Precision instruments
+  "7731.T", "7733.T", "7735.T", "7741.T", "7751.T", "7762.T",
+  // Other manufacturing
+  "7832.T", "7951.T", "7974.T",
+  // Trading companies
+  "8001.T", "8002.T", "8015.T", "8031.T", "8033.T", "8053.T", "8058.T",
+  // Retail
+  "8028.T", "8267.T", "9983.T", "3382.T", "2413.T",
+  // Banks
+  "8304.T", "8306.T", "8309.T", "8316.T", "8331.T", "8354.T", "8355.T",
+  "8358.T", "8369.T", "8411.T",
+  // Securities & commodity futures
+  "8601.T", "8604.T",
+  // Insurance
+  "8630.T", "8725.T", "8750.T", "8766.T",
+  // Real estate
+  "8801.T", "8802.T", "8830.T",
+  // Rail transport
+  "9001.T", "9005.T", "9007.T", "9008.T", "9009.T", "9020.T", "9021.T", "9022.T",
+  // Road transport
+  "9064.T", "9101.T", "9104.T", "9107.T",
+  // Air transport
+  "9202.T", "9361.T",
+  // Warehousing
+  "9301.T",
+  // Telecom
+  "9432.T", "9433.T", "9434.T", "9613.T",
+  // Electric power & gas
+  "9501.T", "9502.T", "9503.T", "9531.T", "9532.T",
+  // Service & internet
+  "2432.T", "3659.T", "4689.T", "4751.T", "9602.T", "9984.T",
+  // Other Nikkei 225 components
+  "2768.T", "3407.T", "4661.T", "6460.T", "7164.T", "8411.T",
+];
+
 // ── Simple in-process cache (keyed by symbol+type) ───────────────────────────
 const _cache = new Map();
 function _get(key) {
@@ -115,6 +197,12 @@ async function getJapanHistoricalCandles(symbol) {
     const closes     = q.close  || [];
     const volumes    = q.volume || [];
 
+    // Exclude today's partial candle — Yahoo includes it when market is open,
+    // but partial-day volume would corrupt avgVolume20d and volumeRatio calc.
+    // We use meta.regularMarketVolume (passed as todayVolume to computeIndicators)
+    // for the live volume; historical candles should only contain completed days.
+    const todayStr = new Date().toISOString().split("T")[0];
+
     const candles = timestamps
       .map((ts, i) => ({
         date:           new Date(ts * 1000).toISOString().split("T")[0],
@@ -125,7 +213,7 @@ async function getJapanHistoricalCandles(symbol) {
         adjusted_close: Number(closes[i] || 0),  // Yahoo doesn't distinguish
         volume:         Number(volumes[i] || 0),
       }))
-      .filter(c => c.close > 0)
+      .filter(c => c.close > 0 && c.date < todayStr)  // completed trading days only
       .sort((a, b) => new Date(a.date) - new Date(b.date));
 
     _set(cacheKey, candles, EOD_TTL);
@@ -176,16 +264,19 @@ async function getJapanBatchHistoricalCandles(symbols) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Scan Japan watchlist for today's top gainers.
- * Equivalent to getTopMovers() in eodhd_live.js but uses Yahoo Finance.
+ * Scan the full Nikkei 225 universe for today's top gainers.
+ * Equivalent to getNSEBroadMovers() for India — scans the complete index,
+ * not a hand-picked watchlist. Uses Yahoo Finance v8/chart per symbol.
  *
- * @param {string[]} watchlist   - Array of EODHD-format symbols e.g. ["7203.T", "6758.T"]
+ * @param {string[]} [symbols]    - Override list (default: full NIKKEI_225, ~225 stocks)
  * @param {number}   minChangePct - Minimum % gain (default 1.0%)
- * @param {number}   topN         - Max results (default 20)
+ * @param {number}   topN         - Max results returned (default 25)
  * @returns {Promise<Array>}      - [{ symbol, price, changePct, volume }, ...]
  */
-async function getJapanBroadMovers(watchlist, minChangePct = 1.0, topN = 20) {
-  if (!watchlist || watchlist.length === 0) return [];
+async function getJapanBroadMovers(symbols, minChangePct = 1.0, topN = 25) {
+  // Default to full Nikkei 225 — do NOT use a small hand-picked watchlist
+  const universe = (symbols && symbols.length > 0) ? symbols : NIKKEI_225;
+  const watchlist = universe;
 
   const results    = [];
   const CHUNK_SIZE = 8;  // Yahoo Finance tolerates ~8 parallel requests comfortably

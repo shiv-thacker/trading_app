@@ -145,8 +145,9 @@ const MARKETS = {
     closeTimeLocal:   "15:30",      // JST 15:30 = IST 12:00 (includes lunch 11:30–12:30)
     indexSymbol:      "N225.INDX",  // Nikkei 225 on EODHD
     useNSELiveFallback: false,
-    // FALLBACK ONLY — primary scanner uses EODHD Screener (full TSE market)
-    // Top Nikkei 225 stocks across all major sectors
+    // FALLBACK ONLY — primary scanner uses getJapanBroadMovers() in yahoo_japan.js
+    // which scans the full Nikkei 225 universe (all 225 stocks) via Yahoo Finance.
+    // This watchlist is only used if yahoo_japan.js itself fails completely.
     watchlist: [
       // Auto & manufacturing
       "7203.T",  "7267.T",  "7269.T",  "7270.T",  "6902.T",

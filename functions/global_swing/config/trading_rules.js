@@ -26,7 +26,7 @@ module.exports = {
   MIN_CHANGE_PCT:           1.0,    // Stock must be up >1.0% today to qualify
   // *** THE COFORGE RULE: never buy near resistance ***
   MAX_52W_HIGH_DIST_PCT:    3.0,    // Price must be ≥3% BELOW the 52-week high
-  MIN_VOLUME_RATIO:         1.3,    // Today's volume ≥ 1.3× the 20-day average
+  MIN_VOLUME_RATIO:         0.8,    // Yesterday's EOD volume ≥ 0.8× 20-day average (swing: uses previous EOD, not intraday)
   MAX_RSI_ENTRY:           68,      // Skip if RSI > 68 (overbought)
   MIN_RSI_ENTRY:           40,      // Skip if RSI < 40 (falling knife)
 

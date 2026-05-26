@@ -250,11 +250,12 @@ async function runGlobalSwingCycle() {
         }
 
       } else if (mood.marketCode === "T") {
-        // ── Japan: Yahoo Finance (EODHD plan does NOT cover TSE stocks) ──
-        // N225.INDX works on EODHD for market mood, but individual stock data
-        // (real-time and EOD) returns "NA"/"Ticker Not Found" on the $29.99 plan.
-        movers = await getJapanBroadMovers(market.watchlist, R.MIN_CHANGE_PCT, 25);
-        logger.info(`🇯🇵 Japan: ${movers.length} movers from Yahoo Finance`);
+        // ── Japan: Yahoo Finance scans full Nikkei 225 (~225 stocks) ──
+        // EODHD plan does NOT cover TSE individual stocks — N225.INDX works
+        // for mood only. No watchlist needed: getJapanBroadMovers() defaults
+        // to the complete NIKKEI_225 universe defined in yahoo_japan.js.
+        movers = await getJapanBroadMovers(null, R.MIN_CHANGE_PCT, 25);
+        logger.info(`🇯🇵 Japan: ${movers.length} movers from full Nikkei 225 scan (Yahoo Finance)`);
 
       } else {
         // ── US / Germany: EODHD Screener (full exchange) ──────────

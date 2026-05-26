@@ -132,22 +132,24 @@ function computeIndicators(candles, todayVolume = 0) {
     ? Math.round(vol20.reduce((s, v) => s + v, 0) / vol20.length)
     : 0;
 
-  // Volume ratio: today vs 20d average (>1.3 = institutional interest)
+  // Volume ratio: today vs 20d average
   //
-  // EODHD real-time (/real-time/{symbol}) for non-US markets (XETRA, TSE)
-  // returns intraday cumulative volume — only what has traded so far today.
-  // Comparing partial-day intraday volume against full-day historical average
-  // always produces ratios like 0.0x–0.2x, even on genuinely high-volume days.
+  // Problem: non-US markets (XETRA, TSE via Yahoo) report intraday cumulative
+  // volume. Early in the session (e.g. 1 hour into a 6.5-hour TSE day) the
+  // live volume is naturally 10-30% of the full-day average — not because
+  // volume is actually low but because the day isn't over yet.
   //
-  // Fix: if todayVolume is zero or looks like partial-day data (< 10% of the
-  // 20d average), fall back to the most recent historical EOD candle's volume.
-  // This gives a realistic "yesterday vs average" ratio and lets real candidates
-  // through, especially for Germany (XETRA) and Japan (T).
+  // Fix: treat live intraday volume as "credible" ONLY when it already equals
+  // 75% or more of the 20d average (meaning the market is near close and the
+  // reading reflects almost the full day). Otherwise fall back to the most
+  // recent COMPLETED trading day's EOD volume from the historical candles.
+  // Note: yahoo_japan.js explicitly excludes today's partial candle from the
+  // historical array, so latestHistVol is always yesterday's full-day EOD.
   const latestHistVol = volumes[volumes.length - 1] || 0;
   const effectiveVolume =
-    todayVolume > 0 && avgVolume20d > 0 && todayVolume >= avgVolume20d * 0.10
-      ? todayVolume       // live intraday volume looks credible — use it
-      : latestHistVol;    // partial/zero live volume — use last EOD candle as proxy
+    todayVolume > 0 && avgVolume20d > 0 && todayVolume >= avgVolume20d * 0.75
+      ? todayVolume       // market near/after close — full-day volume is credible
+      : latestHistVol;    // use previous EOD for early/mid-session partial data
 
   const volumeRatio = avgVolume20d > 0 && effectiveVolume > 0
     ? Math.round((effectiveVolume / avgVolume20d) * 100) / 100
