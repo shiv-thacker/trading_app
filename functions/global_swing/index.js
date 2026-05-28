@@ -194,30 +194,41 @@ async function runGlobalSwingCycle() {
     }
   }
 
-  // ── ④ Auto-enforce hard stop-loss (−7%) in CODE ──────────────
-  // This runs BEFORE Claude so the portfolio is clean when Claude decides.
+  // ── ④ Auto-enforce hard exits in CODE ────────────────────────
+  // Runs BEFORE Claude so the portfolio is clean when Claude decides.
+  // Three code-level exit triggers (Claude cannot override any of these):
+  //   A) Hard stop-loss  : down −7%
+  //   B) Overbought ceiling: RSI ≥ 70 AND within 3% of 52W high (the P911/9502 trap)
+  //   C) Trend flip      : holding's trend turned DOWNTREND
   const autoStopSymbols = [];
+
   for (const h of [...portfolio.holdings]) {
-    // Only enforce stops in open markets
+    // Only enforce exits in open markets
     if (!isMarketOpen(h.market)) continue;
 
     const pnlPct = h.unrealizedPnlPct ?? 0;
+
+    // ── A) Hard stop-loss (−7%) ─────────────────────────────
     if (pnlPct <= R.STOP_LOSS_PCT) {
       logger.warn(`AUTO STOP-LOSS: ${h.symbol} at ${pnlPct.toFixed(2)}% — selling now`);
       await executeSell(
         {
-          symbol:     h.symbol,
-          quantity:   h.quantity,
-          price:      h.currentPrice || h.avgBuyPrice,
-          tradeType:  "SWING_STOP_LOSS",
-          reason:     `Auto stop-loss: down ${pnlPct.toFixed(1)}% from buy price ${h.avgBuyPrice}`,
+          symbol:    h.symbol,
+          market:    h.market,
+          currency:  h.currency,
+          quantity:  h.quantity,
+          price:     h.currentPrice || h.avgBuyPrice,
+          tradeType: "SWING_STOP_LOSS",
+          reason:    `Auto stop-loss: down ${pnlPct.toFixed(1)}% from buy price ${h.avgBuyPrice}`,
           confidence: "HIGH",
         },
         portfolio,
         portfolio.usdInrRate || 84.0
       );
       autoStopSymbols.push(h.symbol);
+      continue;
     }
+
   }
 
   // Recalc after auto-stops
@@ -286,34 +297,67 @@ async function runGlobalSwingCycle() {
       ]);
       const candleMap = { ...japanCandles, ...eohdCandles };
 
+      const indexTodayPct = mood.todayChangePct;
+
       const withIndicators = movers.map(m => ({
         ...m,
         market:     mood.marketCode,
         currency:   market.currency,
-        indicators: computeIndicators(candleMap[m.symbol] || [], m.volume || 0),
+        indicators: {
+          ...computeIndicators(candleMap[m.symbol] || [], m.volume || 0),
+          changePct: m.changePct ?? 0,  // attach to indicators so validator can access it
+        },
       }));
 
-      // Pre-filter before sending to Claude (reduces prompt size + noise)
-      // Log how many stocks each filter removes so we can diagnose "0 candidates" cycles
-      const tooOverbought = withIndicators.filter(s => s.indicators.rsi > R.MAX_RSI_ENTRY).length;
-      const fallingKnife  = withIndicators.filter(s => s.indicators.rsi < R.MIN_RSI_ENTRY).length;
-      const near52wHigh   = withIndicators.filter(s => s.indicators.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT).length;
+      // Pre-filter: enforce ALL 7 entry rules before sending to Claude.
+      // Log removals per rule to diagnose "0 candidates" cycles.
+      const total          = withIndicators.length;
+      const rsiLow         = withIndicators.filter(s => s.indicators.rsi < R.MIN_RSI_ENTRY).length;
+      const rsiHigh        = withIndicators.filter(s => s.indicators.rsi > R.MAX_RSI_ENTRY).length;
+      const near52wHigh    = withIndicators.filter(s => s.indicators.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT).length;
+      const notUptrend     = withIndicators.filter(s => s.indicators.trend !== "UPTREND" && s.indicators.trend !== "UNKNOWN").length;
+      const lowVolume      = withIndicators.filter(s => s.indicators.volumeRatio < R.MIN_VOLUME_RATIO).length;
+      const badMove        = withIndicators.filter(s => {
+        const c = s.changePct ?? 0;
+        return c < R.MIN_CHANGE_PCT || c > R.MAX_CHANGE_PCT;
+      }).length;
+      const staleXover     = withIndicators.filter(s => {
+        const age = s.indicators.emaCrossoverDaysAgo;
+        return age !== null && age !== undefined && age > R.EMA_CROSSOVER_MAX_DAYS;
+      }).length;
+      const underperformer = withIndicators.filter(s => {
+        const c = s.changePct ?? 0;
+        return typeof indexTodayPct === "number" && c <= indexTodayPct;
+      }).length;
 
       logger.info(
-        `${mood.flag} ${mood.marketCode} filter breakdown: ` +
-        `${withIndicators.length} movers → ` +
-        `RSI overbought (>${R.MAX_RSI_ENTRY}): ${tooOverbought} removed, ` +
-        `RSI falling knife (<${R.MIN_RSI_ENTRY}): ${fallingKnife} removed, ` +
-        `near 52W high (<${R.MAX_52W_HIGH_DIST_PCT}%): ${near52wHigh} removed`
+        `${mood.flag} ${mood.marketCode} pre-filter: ${total} movers → ` +
+        `RSI<${R.MIN_RSI_ENTRY}: ${rsiLow} | RSI>${R.MAX_RSI_ENTRY}: ${rsiHigh} | ` +
+        `<${R.MAX_52W_HIGH_DIST_PCT}%52W: ${near52wHigh} | notUP: ${notUptrend} | ` +
+        `vol<${R.MIN_VOLUME_RATIO}x: ${lowVolume} | badChg: ${badMove} | ` +
+        `staleXover: ${staleXover} | underperforms-idx: ${underperformer}`
       );
 
       const filtered = withIndicators.filter(s => {
         const ind = s.indicators;
-        return (
-          ind.rsi >= R.MIN_RSI_ENTRY &&
-          ind.rsi <= R.MAX_RSI_ENTRY &&
-          ind.pctBelow52wHigh >= R.MAX_52W_HIGH_DIST_PCT
-        );
+        const chg = s.changePct ?? 0;
+        const age = ind.emaCrossoverDaysAgo;
+
+        // Rule 1: UPTREND only (no SIDEWAYS / DOWNTREND)
+        if (ind.trend !== "UPTREND" && ind.trend !== "UNKNOWN") return false;
+        // Rule 1b: EMA crossover must be fresh (within EMA_CROSSOVER_MAX_DAYS)
+        if (age !== null && age !== undefined && age > R.EMA_CROSSOVER_MAX_DAYS) return false;
+        // Rule 2: RSI strictly 52–65
+        if (ind.rsi < R.MIN_RSI_ENTRY || ind.rsi > R.MAX_RSI_ENTRY) return false;
+        // Rule 3: 52W high buffer ≥ 8%
+        if (ind.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT) return false;
+        // Rule 4: Volume ≥ 1.2x
+        if (ind.volumeRatio < R.MIN_VOLUME_RATIO) return false;
+        // Rule 5: Today's move +1.5% to +6%
+        if (chg < R.MIN_CHANGE_PCT || chg > R.MAX_CHANGE_PCT) return false;
+        // Rule 6: Must outperform index today
+        if (typeof indexTodayPct === "number" && chg <= indexTodayPct) return false;
+        return true;
       });
 
       if (filtered.length > 0) {
@@ -363,6 +407,184 @@ async function runGlobalSwingCycle() {
     }
   }
 
+  // ── ⑥b Auto-enforce all indicator-based exits ───────────────
+  // Now that holdingsWithHistory is populated we have real RSI / trend / 52W.
+  // Checks run in priority order: full profit → partial profit → trailing stop
+  // → overbought ceiling → downtrend → time-stop.
+  // Each check uses `continue` so a holding is only processed once per cycle.
+  for (const h of [...portfolio.holdings]) {
+    if (!isMarketOpen(h.market)) continue;
+    if (autoStopSymbols.includes(h.symbol)) continue;
+
+    const hist         = holdingsWithHistory[h.symbol];
+    const ind          = hist?.indicators || {};
+    const currentPrice = h.currentPrice || h.avgBuyPrice;
+    const pnlPct       = h.unrealizedPnlPct ?? 0;
+    const daysHeld     = h.daysHeld || 0;
+    const fxRate       = portfolio.usdInrRate || 84.0;
+
+    // ─── B) Full profit target at +20% ─────────────────────────
+    if (pnlPct >= R.TAKE_PROFIT_FULL_PCT) {
+      logger.info(`AUTO EXIT (full profit +${pnlPct.toFixed(1)}%): ${h.symbol} — target hit`);
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   h.quantity,
+          price:      currentPrice,
+          tradeType:  "SWING_SELL",
+          reason:     `Full profit target +${R.TAKE_PROFIT_FULL_PCT}% reached (P&L ${pnlPct.toFixed(1)}%)`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      autoStopSymbols.push(h.symbol);
+      continue;
+    }
+
+    // ─── C) Partial profit at +10% (sell half, activate trailing stop) ──
+    if (!h.trailingStopActivated && pnlPct >= R.TAKE_PROFIT_HALF_PCT) {
+      const sellQty = Math.max(1, Math.floor(h.quantity / 2));
+      if (sellQty > 0 && sellQty < h.quantity) {
+        logger.info(`AUTO PARTIAL SELL (+${pnlPct.toFixed(1)}%): ${h.symbol} — selling ${sellQty}/${h.quantity} shares, trailing stop activates`);
+        await executeSell(
+          {
+            symbol:     h.symbol,
+            market:     h.market,
+            currency:   h.currency,
+            quantity:   sellQty,
+            price:      currentPrice,
+            tradeType:  "SWING_TAKE_PROFIT",
+            reason:     `Partial profit +${R.TAKE_PROFIT_HALF_PCT}% reached — sell 50%, trailing stop entry+${R.TRAILING_STOP_PCT}% activated`,
+            confidence: "HIGH",
+          },
+          portfolio, fxRate
+        );
+        // trailingStopActivated + trailingStopPrice are set by executeSell for partial sells
+        // Skip further checks for this holding this cycle
+        continue;
+      }
+    }
+
+    // ─── D) Trailing stop: if price falls below entry + TRAILING_STOP_PCT ──
+    if (h.trailingStopActivated && h.trailingStopPrice && currentPrice <= h.trailingStopPrice) {
+      logger.warn(
+        `AUTO EXIT (trailing stop): ${h.symbol} price ${currentPrice} ≤ trailing stop ${h.trailingStopPrice} ` +
+        `(entry + ${R.TRAILING_STOP_PCT}%) — selling remaining`
+      );
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   h.quantity,
+          price:      currentPrice,
+          tradeType:  "SWING_STOP_LOSS",
+          reason:     `Trailing stop hit: price ${currentPrice} ≤ ${h.trailingStopPrice} (entry+${R.TRAILING_STOP_PCT}%)`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      autoStopSymbols.push(h.symbol);
+      continue;
+    }
+
+    // ─── E) Overbought ceiling: RSI ≥ 70 AND within EXIT_52W_HIGH_DANGER % of 52W high ──
+    if (
+      ind.high52w > 0 &&
+      (ind.rsi || 0) >= R.EXIT_RSI_OVERBOUGHT &&
+      (ind.pctBelow52wHigh || 100) < R.EXIT_52W_HIGH_DANGER
+    ) {
+      logger.warn(
+        `AUTO EXIT (overbought ceiling): ${h.symbol} RSI=${ind.rsi} and ` +
+        `${(ind.pctBelow52wHigh || 0).toFixed(1)}% below 52W high — sell 50% into strength`
+      );
+      const sellQty = Math.max(1, Math.floor(h.quantity / 2));
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   sellQty,
+          price:      currentPrice,
+          tradeType:  "SWING_TAKE_PROFIT",
+          reason:     `RSI ${ind.rsi} overbought + ${(ind.pctBelow52wHigh || 0).toFixed(1)}% from 52W high — sell 50% before reversal`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      if (sellQty >= h.quantity) autoStopSymbols.push(h.symbol);
+      continue;
+    }
+
+    // ─── F) Trend flip to DOWNTREND ─────────────────────────────
+    if (R.EXIT_DOWNTREND && ind.trend === "DOWNTREND") {
+      logger.warn(`AUTO EXIT (downtrend): ${h.symbol} trend flipped to DOWNTREND — selling 100%`);
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   h.quantity,
+          price:      currentPrice,
+          tradeType:  "SWING_STOP_LOSS",
+          reason:     `Trend breakdown: EMA9 < EMA20 — uptrend that justified entry no longer exists`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      autoStopSymbols.push(h.symbol);
+      continue;
+    }
+
+    // ─── G) Time-stop Stage 2: Day 14+, below +7% ───────────────
+    if (daysHeld >= R.TIME_STOP_STAGE2_DAYS && pnlPct < R.TIME_STOP_STAGE2_MIN_PCT) {
+      logger.warn(
+        `AUTO EXIT (time-stop Day ${daysHeld}): ${h.symbol} only ${pnlPct.toFixed(1)}% after ` +
+        `${daysHeld} days — too slow, freeing capital`
+      );
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   h.quantity,
+          price:      currentPrice,
+          tradeType:  "SWING_TIME_STOP",
+          reason:     `Time-stop Day ${daysHeld}: only ${pnlPct.toFixed(1)}% gain (need +${R.TIME_STOP_STAGE2_MIN_PCT}% by Day ${R.TIME_STOP_STAGE2_DAYS}) — dead money`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      autoStopSymbols.push(h.symbol);
+      continue;
+    }
+
+    // ─── H) Time-stop Stage 1: Day 7+, below +3% ────────────────
+    if (daysHeld >= R.TIME_STOP_STAGE1_DAYS && pnlPct < R.TIME_STOP_STAGE1_MIN_PCT) {
+      logger.warn(
+        `AUTO EXIT (time-stop Day ${daysHeld}): ${h.symbol} only ${pnlPct.toFixed(1)}% after ` +
+        `${daysHeld} days — not working, freeing capital`
+      );
+      await executeSell(
+        {
+          symbol:     h.symbol,
+          market:     h.market,
+          currency:   h.currency,
+          quantity:   h.quantity,
+          price:      currentPrice,
+          tradeType:  "SWING_TIME_STOP",
+          reason:     `Time-stop Day ${daysHeld}: only ${pnlPct.toFixed(1)}% gain (need +${R.TIME_STOP_STAGE1_MIN_PCT}% by Day ${R.TIME_STOP_STAGE1_DAYS}) — position not working`,
+          confidence: "HIGH",
+        },
+        portfolio, fxRate
+      );
+      autoStopSymbols.push(h.symbol);
+      continue;
+    }
+  }
+
   // ── ⑦ Increment daysHeld (once per calendar day) ────────────
   const todayDate = new Date().toISOString().split("T")[0];
   if (portfolio.lastDaysHeldDate !== todayDate) {
@@ -408,7 +630,31 @@ async function runGlobalSwingCycle() {
   let tradesExecuted     = 0;
   let rotationsThisCycle = 0;
 
-  for (const trade of (decision.trades || [])) {
+  // Diagnose the "decide but don't trade" bug:
+  // Log how many trades Claude proposed vs how many actually executed.
+  const proposedTrades = decision.trades || [];
+  const hasCandidatesAvailable = Object.keys(candidates).length > 0;
+  const hasOpenSlots = portfolio.holdings.length < R.MAX_TOTAL_HOLDINGS;
+
+  if (proposedTrades.length === 0 && hasCandidatesAvailable && hasOpenSlots) {
+    // Claude had candidates + open slots but returned trades: []
+    // This is the "decide but don't trade" scenario — flag it clearly in logs
+    logger.warn(
+      `⚠️ CONSISTENCY WARNING: Claude returned 0 trades despite ` +
+      `${Object.keys(candidates).length} market(s) with candidates ` +
+      `and ${R.MAX_TOTAL_HOLDINGS - portfolio.holdings.length} open slot(s). ` +
+      `Check Claude thoughts for explanation.`
+    );
+    decision.thoughts = decision.thoughts || [];
+    decision.thoughts.push(
+      `⚠️ CONSISTENCY WARNING: 0 trades returned despite having candidates and open slots. ` +
+      `If Capital Decision said deploy, check why trades array was empty.`
+    );
+  } else {
+    logger.info(`Claude proposed ${proposedTrades.length} trade(s) this cycle.`);
+  }
+
+  for (const trade of proposedTrades) {
     // Gate: market must be open right now for execution
     if (!isMarketOpen(trade.market)) {
       logger.info(`Skip ${trade.action} ${trade.symbol}: ${trade.market} is currently closed`);
@@ -423,13 +669,17 @@ async function runGlobalSwingCycle() {
       }
 
       // Get pre-computed indicators for this symbol
-      const candidateStock = (candidates[trade.market] || []).find(c => c.symbol === trade.symbol);
-      const indicators     = candidateStock?.indicators || {};
-      const marketMood     = marketMoods[trade.market]?.mood || "NEUTRAL";
+      const candidateStock  = (candidates[trade.market] || []).find(c => c.symbol === trade.symbol);
+      const indicators      = candidateStock?.indicators || {};
+      const marketMood      = marketMoods[trade.market]?.mood     || "NEUTRAL";
+      const indexTodayPct   = marketMoods[trade.market]?.todayChangePct ?? null;
 
-      const { ok, reason } = validateBuy(trade, portfolio, indicators, marketMood);
+      const { ok, reason } = validateBuy(trade, portfolio, indicators, marketMood, indexTodayPct);
       if (!ok) {
-        logger.info(`BUY blocked [${trade.symbol}]: ${reason}`);
+        logger.warn(`BUY blocked [${trade.symbol}]: ${reason}`);
+        // Record the block reason directly in Claude's thoughts so it appears in exported logs
+        decision.thoughts = decision.thoughts || [];
+        decision.thoughts.push(`⚠️ BUY blocked by validator [${trade.symbol}]: ${reason}`);
         continue;
       }
 

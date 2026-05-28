@@ -149,8 +149,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>🌍 Global Swing AI Logs Exporter</h1>
-        <p class="subtitle">Export ARJUN global swing cycle logs from <code>global_swing_ai_logs</code></p>
+        <h1>🌍 Global AI Logs Exporter</h1>
+        <p class="subtitle">Export ARJUN global cycle logs from <code>global_swing_ai_logs</code></p>
 
         <div class="help">
             <strong>Your project details are already filled in!</strong><br>
@@ -181,6 +181,14 @@
             style="background: #f0f0f0;"
         />
 
+        <label for="collectionName">Collection Name</label>
+        <input
+            type="text"
+            id="collectionName"
+            class="date-input"
+            value="global_swing_ai_logs"
+        />
+
         <label for="startDate">Export from date:</label>
         <input
             type="datetime-local"
@@ -190,7 +198,7 @@
         />
 
         <button id="exportBtn" onclick="exportData()">
-            📥 Export Global Swing AI Logs
+            📥 Export Global AI Logs
         </button>
 
         <div id="status" class="status"></div>
@@ -205,6 +213,7 @@
 
             const projectId = document.getElementById('projectId').value.trim();
             const apiKey = document.getElementById('apiKey').value.trim();
+            const preferredCollection = document.getElementById('collectionName').value.trim() || 'global_swing_ai_logs';
             const startDateInput = document.getElementById('startDate').value;
 
             if (!projectId || !apiKey) {
@@ -231,31 +240,59 @@
                 const app = initializeApp(firebaseConfig);
                 const db = getFirestore(app);
 
-                showStatus('Connected! Fetching global_swing_ai_logs...', 'info');
+                // Parse datetime-local manually to avoid browser-specific parsing quirks.
+                // Input format from <input type="datetime-local"> is "YYYY-MM-DDTHH:mm".
+                const [datePart, timePart] = startDateInput.split('T');
+                const [year, month, day] = datePart.split('-').map(Number);
+                const [hour, minute] = (timePart || '00:00').split(':').map(Number);
+                const startDate = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+                if (!Number.isFinite(startDate)) {
+                    throw new Error('Invalid start date value');
+                }
+
+                const interpretedLocal = new Date(startDate).toLocaleString();
+                showStatus(
+                    `Connected! Fetching ${preferredCollection} from ${interpretedLocal} (local timezone)...`,
+                    'info'
+                );
                 exportBtn.textContent = '⏳ Fetching data...';
 
-                const startDate = new Date(startDateInput).getTime();
-
-                const q = query(
-                    collection(db, 'global_swing_ai_logs'),
-                    where('timestampMs', '>=', startDate),
-                    orderBy('timestampMs', 'asc')
-                );
-
-                const querySnapshot = await getDocs(q);
-
-                const logs = [];
-                querySnapshot.forEach((doc) => {
-                    logs.push({
-                        id: doc.id,
-                        ...doc.data()
+                async function fetchLogsFor(collectionName) {
+                    const q = query(
+                        collection(db, collectionName),
+                        where('timestampMs', '>=', startDate),
+                        orderBy('timestampMs', 'asc')
+                    );
+                    const querySnapshot = await getDocs(q);
+                    const logs = [];
+                    querySnapshot.forEach((doc) => {
+                        logs.push({
+                            id: doc.id,
+                            ...doc.data()
+                        });
                     });
-                });
+                    return logs;
+                }
+
+                const fallbackCollection =
+                    preferredCollection === 'global_swing_ai_logs'
+                        ? 'global_ai_logs'
+                        : 'global_swing_ai_logs';
+
+                let usedCollection = preferredCollection;
+                let logs = [];
+                try {
+                    logs = await fetchLogsFor(preferredCollection);
+                } catch (firstErr) {
+                    console.warn(`Primary collection "${preferredCollection}" failed, trying fallback "${fallbackCollection}"`, firstErr);
+                    logs = await fetchLogsFor(fallbackCollection);
+                    usedCollection = fallbackCollection;
+                }
 
                 if (logs.length === 0) {
                     showStatus('No entries found from the selected date', 'error');
                     exportBtn.disabled = false;
-                    exportBtn.textContent = '📥 Export Global Swing AI Logs';
+                    exportBtn.textContent = '📥 Export Global AI Logs';
                     return;
                 }
 
@@ -265,28 +302,35 @@
                 const link = document.createElement('a');
                 link.href = url;
 
-                const dateStr = new Date(startDateInput).toISOString().split('T')[0];
-                link.download = `global_swing_ai_logs_from_${dateStr}.json`;
+                // Keep filename in local selected date (not UTC) to avoid off-by-one day labels.
+                const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                link.download = `${usedCollection}_from_${dateStr}.json`;
                 link.click();
                 URL.revokeObjectURL(url);
 
-                showStatus(`✅ Success! Downloaded ${logs.length} global swing AI log entries`, 'success');
+                showStatus(`✅ Success! Downloaded ${logs.length} entries from ${usedCollection}`, 'success');
                 exportBtn.textContent = '✅ Export Complete!';
 
                 setTimeout(() => {
                     exportBtn.disabled = false;
-                    exportBtn.textContent = '📥 Export Global Swing AI Logs';
+                    exportBtn.textContent = '📥 Export Global AI Logs';
                 }, 3000);
 
             } catch (error) {
                 console.error('Error:', error);
                 let message = error.message;
+                if (message.includes('insufficient permissions')) {
+                    message += ' — check Firestore rules for the selected collection name.';
+                }
+                if (message.includes('NOT_FOUND') || message.includes('Invalid collection reference')) {
+                    message = `Collection not found. Try "global_swing_ai_logs" first. Original error: ${error.message}`;
+                }
                 if (message.includes('index')) {
                     message += ' — You may need a Firestore composite index for timestampMs. Check the browser console link.';
                 }
                 showStatus(`❌ Error: ${message}`, 'error');
                 exportBtn.disabled = false;
-                exportBtn.textContent = '📥 Export Global Swing AI Logs';
+                exportBtn.textContent = '📥 Export Global AI Logs';
             }
         }
 

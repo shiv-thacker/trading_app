@@ -172,18 +172,41 @@ function computeIndicators(candles, todayVolume = 0) {
     trend = "SIDEWAYS";
   }
 
+  // ── EMA crossover age ────────────────────────────────────────
+  // How many trading days ago did EMA9 cross above EMA20?
+  // Returns: 0 = crossover today, 1 = yesterday, ..., 10 = 10 days ago
+  // Returns: null = no bullish crossover in last 10 days (stale or not in uptrend)
+  // Rule: crossover must be within 10 days for entry to qualify (fresh momentum).
+  let emaCrossoverDaysAgo = null;
+  if (trend === "UPTREND" && closes.length >= 25) {
+    for (let daysBack = 1; daysBack <= 10; daysBack++) {
+      const prevCloses = closes.slice(0, closes.length - daysBack);
+      if (prevCloses.length < 20) break;
+      const prevEma9  = computeEMA(prevCloses, 9);
+      const prevEma20 = computeEMA(prevCloses, 20);
+      if (prevEma9 <= prevEma20) {
+        // Found the day before the crossover — crossover was `daysBack` days ago
+        emaCrossoverDaysAgo = daysBack;
+        break;
+      }
+    }
+    // If EMA9 was already above EMA20 for all 10 days back, crossover is stale (> 10 days)
+    if (emaCrossoverDaysAgo === null) emaCrossoverDaysAgo = 11;
+  }
+
   return {
     rsi,
     ema9,
     ema20,
-    high52w:         Math.round(high52w * 100) / 100,
-    low52w:          Math.round(low52w  * 100) / 100,
-    pctBelow52wHigh,  // THE COFORGE GUARD: must be ≥ 3 to qualify for BUY
+    high52w:             Math.round(high52w * 100) / 100,
+    low52w:              Math.round(low52w  * 100) / 100,
+    pctBelow52wHigh,     // must be ≥ 8% to qualify for BUY (master rules v2)
     avgVolume20d,
     volumeRatio,
     support10d,
     trend,
-    dataPoints:      candles.length,
+    emaCrossoverDaysAgo, // null = no crossover; 1–10 = fresh; 11 = stale (>10 days)
+    dataPoints:          candles.length,
   };
 }
 

@@ -6,18 +6,24 @@
  * WHY CODE-LEVEL (not just prompt instructions):
  *   Claude's prompt can be ignored or misunderstood in edge cases.
  *   These validators are ABSOLUTE — they run after Claude proposes a trade.
- *   If any check fails, the trade is silently skipped and logged.
+ *   If any check fails, the trade is skipped and logged.
  *
- * RULES ENFORCED HERE:
- *   ① Max 5 total holdings (across all markets)
- *   ② Max 2 holdings per market (concentration risk)
- *   ③ No duplicate symbol
- *   ④ No re-buy within NO_REBUY_DAYS days of a profitable sell
- *   ⑤ Sufficient cash after trade + reserve
- *   ⑥ Position size ≤ 25% of total portfolio
- *   ⑦ 52W high proximity guard — pctBelow52wHigh must be ≥ 3% (THE COFORGE RULE)
- *   ⑧ RSI guard — not overbought (> 68) or falling knife (< 40)
- *   ⑨ Market mood guard — no new buys in BEARISH market
+ * RULES ENFORCED (master rules v2 — zero exceptions):
+ *   ①  Max 5 total holdings (across all markets)
+ *   ②  Max 2 holdings per market (concentration risk)
+ *   ③  No duplicate symbol
+ *   ④  No re-buy within NO_REBUY_DAYS days of a recent sell
+ *   ⑤  Sufficient cash after trade + ₹20,000 reserve
+ *   ⑥  Position size ≤ 25% of total portfolio
+ *   ⑦  52W high proximity ≥ 8% below (the 3% rule killed P911 and 9502.T)
+ *   ⑧  RSI strictly 52–65 (not 40–68; tighter sweet spot)
+ *   ⑨  Market mood guard — BEARISH or NEUTRAL blocks new buys
+ *   ⑩  Trend guard — UPTREND only (SIDEWAYS/DOWNTREND blocked)
+ *   ⑪  Volume guard — must be ≥ 1.2x 20-day average
+ *   ⑫  Daily move guard — must be +1.5% to +6% today
+ *   ⑬  EMA crossover freshness — crossover within last 10 days
+ *   ⑭  Index outperformance — stock must beat its market index today
+ *   ⑮  Minimum confidence score — score must be ≥ 8 / 15
  */
 
 const R      = require("../config/trading_rules");
@@ -27,13 +33,14 @@ const logger = require("firebase-functions/logger");
 /**
  * Validate a proposed BUY trade against all portfolio rules.
  *
- * @param {Object} trade        - Trade proposal from Claude
- * @param {Object} portfolio    - Current portfolio state
- * @param {Object} indicators   - Technical indicators for the stock (from technical.js)
- * @param {string} marketMood   - "BULLISH" | "NEUTRAL" | "BEARISH"
+ * @param {Object} trade            - Trade proposal from Claude
+ * @param {Object} portfolio        - Current portfolio state
+ * @param {Object} indicators       - Technical indicators for the stock (from technical.js)
+ * @param {string} marketMood       - "BULLISH" | "NEUTRAL" | "BEARISH"
+ * @param {number} [indexTodayPct]  - Market index today% (for outperformance check; optional)
  * @returns {{ ok: boolean, reason: string }}
  */
-function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") {
+function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL", indexTodayPct = null) {
   const {
     holdings = [], capitalINR = 0, usdInrRate = 84.0,
     totalValueINR = 0, recentSells = [],
@@ -55,7 +62,7 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
     return { ok: false, reason: `Already holding ${trade.symbol}` };
   }
 
-  // ④ Re-buy cooldown (profitable exits only) ─────────────────
+  // ④ Re-buy cooldown ─────────────────────────────────────────
   const recentSell = (recentSells || []).find(s => s.symbol === trade.symbol);
   if (recentSell) {
     const daysSince = (Date.now() - (recentSell.soldAt || 0)) / (1000 * 60 * 60 * 24);
@@ -67,9 +74,9 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
     }
   }
 
-  // ⑤ Cash reserve check (unified INR pool) ──────────────────
+  // ⑤ Cash reserve check ─────────────────────────────────────
   const tradeINR   = toINR(trade.totalAmount, trade.currency || "USD", portfolio);
-  const reserveINR = R.MIN_CASH_RESERVE_INR;  // always keep ₹2,000 minimum
+  const reserveINR = R.MIN_CASH_RESERVE_INR;
 
   if (capitalINR - tradeINR < reserveINR) {
     return {
@@ -79,7 +86,6 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
   }
 
   // ⑥ Position size cap ───────────────────────────────────────
-
   if (tradeINR > totalValueINR * R.MAX_POSITION_PCT) {
     return {
       ok:     false,
@@ -87,30 +93,98 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL") 
     };
   }
 
-  // ⑦ 52-week high proximity — THE COFORGE RULE ────────────────
+  // ⑦ 52-week high proximity ──────────────────────────────────
   const pctBelow = indicators.pctBelow52wHigh ?? 100;
   if (pctBelow < R.MAX_52W_HIGH_DIST_PCT) {
     return {
       ok:     false,
-      reason: `${trade.symbol} only ${pctBelow.toFixed(1)}% below 52W high — too close to resistance (need ≥${R.MAX_52W_HIGH_DIST_PCT}%)`,
+      reason: `${trade.symbol} only ${pctBelow.toFixed(1)}% below 52W high — need ≥${R.MAX_52W_HIGH_DIST_PCT}% buffer (was ${R.MAX_52W_HIGH_DIST_PCT}%; P911/9502 proved 3% too thin)`,
     };
   }
 
-  // ⑧ RSI guard ────────────────────────────────────────────────
+  // ⑧ RSI strict range 52–65 ──────────────────────────────────
   const rsi = indicators.rsi ?? 50;
   if (rsi > R.MAX_RSI_ENTRY) {
-    return { ok: false, reason: `RSI ${rsi} > ${R.MAX_RSI_ENTRY} — overbought` };
+    return { ok: false, reason: `RSI ${rsi} > ${R.MAX_RSI_ENTRY} — overbought, risk of reversal` };
   }
   if (rsi < R.MIN_RSI_ENTRY) {
-    return { ok: false, reason: `RSI ${rsi} < ${R.MIN_RSI_ENTRY} — falling knife` };
+    return { ok: false, reason: `RSI ${rsi} < ${R.MIN_RSI_ENTRY} — no momentum yet, too early` };
   }
 
-  // ⑨ Market mood guard ────────────────────────────────────────
+  // ⑨ Market mood guard — NEUTRAL is also blocked now ─────────
   if (marketMood === "BEARISH") {
     return { ok: false, reason: `${trade.market} is BEARISH — no new positions allowed` };
   }
+  if (marketMood === "NEUTRAL") {
+    return { ok: false, reason: `${trade.market} is NEUTRAL — only BULLISH markets allow new buys` };
+  }
 
-  logger.info(`validateBuy: ✅ ${trade.symbol} passed all checks`);
+  // ⑩ Trend guard — UPTREND required ──────────────────────────
+  const trend = indicators.trend;
+  if (trend && trend !== "UPTREND" && trend !== "UNKNOWN") {
+    return {
+      ok:     false,
+      reason: `${trade.symbol} trend is ${trend} — only UPTREND entries allowed (EMA9 > EMA20)`,
+    };
+  }
+
+  // ⑪ Volume guard — ≥ 1.2x average ──────────────────────────
+  const volumeRatio = indicators.volumeRatio ?? 1.5;
+  if (volumeRatio < R.MIN_VOLUME_RATIO) {
+    return {
+      ok:     false,
+      reason: `${trade.symbol} volume ratio ${volumeRatio.toFixed(2)}x < ${R.MIN_VOLUME_RATIO}x — low volume moves almost always reverse`,
+    };
+  }
+
+  // ⑫ Daily move range +1.5% to +6% ───────────────────────────
+  const changePct = indicators.changePct ?? (trade.changePct ?? null);
+  if (changePct !== null) {
+    if (changePct < R.MIN_CHANGE_PCT) {
+      return {
+        ok:     false,
+        reason: `${trade.symbol} only up ${changePct.toFixed(2)}% today — need ≥${R.MIN_CHANGE_PCT}% for real momentum`,
+      };
+    }
+    if (changePct > R.MAX_CHANGE_PCT) {
+      return {
+        ok:     false,
+        reason: `${trade.symbol} up ${changePct.toFixed(2)}% today — >6% is a spike, chasing is dangerous`,
+      };
+    }
+  }
+
+  // ⑬ EMA crossover freshness — within last 10 days ──────────
+  const crossoverAge = indicators.emaCrossoverDaysAgo;
+  if (crossoverAge !== null && crossoverAge !== undefined) {
+    if (crossoverAge > R.EMA_CROSSOVER_MAX_DAYS) {
+      return {
+        ok:     false,
+        reason: `${trade.symbol} EMA crossover was ${crossoverAge} days ago — stale (need within ${R.EMA_CROSSOVER_MAX_DAYS} days for fresh momentum)`,
+      };
+    }
+  }
+
+  // ⑭ Index outperformance — stock must beat its market index ─
+  if (indexTodayPct !== null && changePct !== null) {
+    if (changePct <= indexTodayPct) {
+      return {
+        ok:     false,
+        reason: `${trade.symbol} (${changePct > 0 ? "+" : ""}${changePct.toFixed(2)}%) not outperforming index (${indexTodayPct > 0 ? "+" : ""}${indexTodayPct.toFixed(2)}%) — needs its own buying pressure`,
+      };
+    }
+  }
+
+  // ⑮ Minimum confidence score ────────────────────────────────
+  const confidenceScore = trade.confidenceScore ?? null;
+  if (confidenceScore !== null && confidenceScore < R.MIN_CONFIDENCE_SCORE) {
+    return {
+      ok:     false,
+      reason: `${trade.symbol} confidence score ${confidenceScore}/15 < minimum ${R.MIN_CONFIDENCE_SCORE} required`,
+    };
+  }
+
+  logger.info(`validateBuy: ✅ ${trade.symbol} passed all ${confidenceScore !== null ? `15 checks (score: ${confidenceScore}/15)` : "checks"}`);
   return { ok: true, reason: "All checks passed" };
 }
 

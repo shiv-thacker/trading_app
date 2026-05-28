@@ -146,53 +146,33 @@ async function getMarketMood(marketCode, sentiment = null) {
     logger.warn(`Market mood: history unavailable for ${marketCode}`);
   }
 
-  // ── 3-signal score ────────────────────────────────────────────
-  // Sentiment is on a -1..+1 scale; price % is on a -5..+5 typical range.
-  // Normalise sentiment to the same rough scale: multiply by 5 so ±1 sentiment
-  // contributes roughly the same weight as a ±5% price move.
-  const sentimentScaled = typeof sentiment === "number" ? sentiment * 5 : null;
-  const hasSentiment    = sentimentScaled !== null;
+  // ── Mood score (master rules v2) ─────────────────────────────
+  // Formula: score = (today% × 2) + (5-day% × 1) + sentiment_score
+  // sentiment is on -1..+1 scale — used raw (typical contribution ≈ ±0.1–0.3)
+  // When market is CLOSED, today% is stale so we use only 5-day% + sentiment.
+  const hasSentiment = typeof sentiment === "number";
+  const sentimentVal = hasSentiment ? sentiment : 0;
 
   let score;
   if (isOpen) {
-    // OPEN: live data + sentiment
-    const w5d   = hasSentiment ? R.MOOD_WEIGHT_5D_OPEN        : 0.60;
-    const wDay  = hasSentiment ? R.MOOD_WEIGHT_TODAY_OPEN      : 0.40;
-    const wSent = hasSentiment ? R.MOOD_WEIGHT_SENTIMENT_OPEN  : 0;
-    score = Math.round(
-      (fiveDayChangePct * w5d + todayChangePct * wDay + (sentimentScaled || 0) * wSent) * 100
-    ) / 100;
+    score = (todayChangePct * 2) + (fiveDayChangePct * 1) + sentimentVal;
   } else {
-    // CLOSED: "today %" is stale — lean on sentiment for the dynamic portion
-    const w5d   = hasSentiment ? R.MOOD_WEIGHT_5D_CLOSED        : 1.0;
-    const wSent = hasSentiment ? R.MOOD_WEIGHT_SENTIMENT_CLOSED  : 0;
-    score = Math.round(
-      (fiveDayChangePct * w5d + (sentimentScaled || 0) * wSent) * 100
-    ) / 100;
+    // today% is yesterday's close — skip it when closed, lean on 5-day + sentiment
+    score = fiveDayChangePct + sentimentVal;
   }
+  score = Math.round(score * 100) / 100;
 
   // ── Classify ─────────────────────────────────────────────────
-  // Primary signal: 5-day trend
-  // Secondary: today % (if open) or sentiment (if closed) can flip a borderline neutral
-  const sentimentPositive = hasSentiment && sentiment  >  R.SENTIMENT_BULLISH_THRESHOLD;
-  const sentimentNegative = hasSentiment && sentiment  <  R.SENTIMENT_BEARISH_THRESHOLD;
-
+  // score ≥ 2.0 → BULLISH (can open new positions)
+  // score 1.0–1.99 → NEUTRAL (no new buys, hold existing)
+  // score < 1.0 → BEARISH (no new buys, check stops)
   let mood;
-  if (fiveDayChangePct >= R.BULLISH_INDEX_5D_PCT) {
+  if (score >= R.BULLISH_SCORE_THRESHOLD) {
     mood = "BULLISH";
-  } else if (fiveDayChangePct <= R.BEARISH_INDEX_5D_PCT) {
-    mood = "BEARISH";
-  } else if (isOpen && todayChangePct >= R.BULLISH_TODAY_PCT * 2) {
-    mood = "BULLISH";
-  } else if (isOpen && todayChangePct <= R.BEARISH_TODAY_PCT * 2) {
-    mood = "BEARISH";
-  } else if (sentimentPositive) {
-    // Market closed or neutral price trend — positive news tips it bullish
-    mood = "BULLISH";
-  } else if (sentimentNegative) {
-    mood = "BEARISH";
-  } else {
+  } else if (score >= R.NEUTRAL_SCORE_THRESHOLD) {
     mood = "NEUTRAL";
+  } else {
+    mood = "BEARISH";
   }
 
   const sentimentLabel = hasSentiment

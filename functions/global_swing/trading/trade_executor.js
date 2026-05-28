@@ -22,7 +22,7 @@
  * TRADE TYPES HANDLED:
  *   SWING_BUY          → New long position
  *   SWING_SELL         → Full exit (stop-loss, target, or Claude decision)
- *   SWING_TAKE_PROFIT  → Partial sell (half position at +8%)
+ *   SWING_TAKE_PROFIT  → Partial sell (half position at +10%, trailing stop activated)
  *   SWING_ROTATION     → Sell one position to fund another
  *   SWING_STOP_LOSS    → Auto-stop triggered by code (not Claude)
  *   SWING_TIME_STOP    → Exit due to time-stop (dead money rule)
@@ -156,22 +156,31 @@ async function executeSell(trade, portfolio, usdInrRate = 83.5) {
     // Full sell — remove from holdings
     portfolio.holdings = portfolio.holdings.filter(h => h.symbol !== holding.symbol);
 
-    // Track profitable exits for NO_REBUY_DAYS cooldown
-    if (pnlPct > 0) {
-      if (!portfolio.recentSells) portfolio.recentSells = [];
-      // Prune entries older than NO_REBUY_DAYS
-      portfolio.recentSells = portfolio.recentSells.filter(
-        s => (Date.now() - (s.soldAt || 0)) < R.NO_REBUY_DAYS * 24 * 60 * 60 * 1000
-      );
-      portfolio.recentSells.push({ symbol: holding.symbol, soldAt: Date.now() });
-    }
+    // Track exits for NO_REBUY_DAYS cooldown
+    if (!portfolio.recentSells) portfolio.recentSells = [];
+    portfolio.recentSells = portfolio.recentSells.filter(
+      s => (Date.now() - (s.soldAt || 0)) < R.NO_REBUY_DAYS * 24 * 60 * 60 * 1000
+    );
+    portfolio.recentSells.push({ symbol: holding.symbol, soldAt: Date.now() });
   } else {
-    // Partial sell — reduce quantity (e.g. SWING_TAKE_PROFIT at +8%)
+    // Partial sell — reduce quantity (e.g. SWING_TAKE_PROFIT at +10%)
+    // After partial sell, activate trailing stop at entry + TRAILING_STOP_PCT
+    const trailingStopPrice = Math.round(
+      holding.avgBuyPrice * (1 + R.TRAILING_STOP_PCT / 100) * 100
+    ) / 100;
+
     const idx = portfolio.holdings.findIndex(h => h.symbol === holding.symbol);
     portfolio.holdings[idx] = {
       ...holding,
-      quantity: holding.quantity - sellQty,
+      quantity:              holding.quantity - sellQty,
+      trailingStopActivated: true,
+      trailingStopPrice,     // sell remaining if price drops to this level
     };
+
+    logger.info(
+      `📌 Trailing stop set for ${holding.symbol}: ` +
+      `₹/price ${trailingStopPrice} (entry ${holding.avgBuyPrice} + ${R.TRAILING_STOP_PCT}%)`
+    );
   }
 
   await recordTrade({

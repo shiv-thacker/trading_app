@@ -2,15 +2,10 @@
  * global_swing/config/trading_rules.js
  * =======================================
  * All trading constants — one file, one place to change.
+ * Updated to master rules v2 — target 40–80% annual return.
  *
  * These rules apply identically across India, US, Germany, Japan.
- * The Claude prompt, validators, and auto-stop all read from here.
- *
- * ── HOW TO ADJUST ─────────────────────────────────────────────
- * Change a number here → it propagates to all 3 layers:
- *   1. trade_validator.js (code-level gate)
- *   2. swing_brain.js     (Claude's prompt instructions)
- *   3. global_swing/index (auto stop-loss enforcement)
+ * The Claude prompt, validators, pre-filters, and auto-stops all read from here.
  */
 
 module.exports = {
@@ -18,58 +13,70 @@ module.exports = {
   // ── Portfolio limits ────────────────────────────────────────
   MAX_TOTAL_HOLDINGS:        5,     // Max open positions across ALL markets
   MAX_HOLDINGS_PER_MARKET:   2,     // Max positions within any single market
-  MIN_CASH_RESERVE_INR:   2000,     // Always keep ₹2,000 INR untouched as buffer
+  MIN_CASH_RESERVE_INR:  20000,     // Always keep ₹20,000 INR as emergency buffer
   MIN_CASH_RESERVE_USD:     50,     // Always keep $50 USD untouched as buffer
   MAX_POSITION_PCT:         0.25,   // Max 25% of total portfolio per position
 
+  // ── Position sizing by confidence score ─────────────────────
+  POSITION_SIZE_BASE:      15000,   // Score 8–10 → ₹15,000
+  POSITION_SIZE_MID:       20000,   // Score 11–13 → ₹20,000
+  POSITION_SIZE_HIGH:      25000,   // Score 14+ → ₹25,000
+  MIN_CONFIDENCE_SCORE:        8,   // Minimum score to buy (out of 15)
+  SCORE_MID_THRESHOLD:        11,   // Score ≥ 11 → ₹20,000
+  SCORE_HIGH_THRESHOLD:       14,   // Score ≥ 14 → ₹25,000
+
   // ── Entry rules ──────────────────────────────────────────────
-  MIN_CHANGE_PCT:           1.0,    // Stock must be up >1.0% today to qualify
-  // *** THE COFORGE RULE: never buy near resistance ***
-  MAX_52W_HIGH_DIST_PCT:    3.0,    // Price must be ≥3% BELOW the 52-week high
-  MIN_VOLUME_RATIO:         0.8,    // Yesterday's EOD volume ≥ 0.8× 20-day average (swing: uses previous EOD, not intraday)
-  MAX_RSI_ENTRY:           68,      // Skip if RSI > 68 (overbought)
-  MIN_RSI_ENTRY:           40,      // Skip if RSI < 40 (falling knife)
+  MIN_CHANGE_PCT:            1.5,   // Stock must be up ≥1.5% today (real momentum)
+  MAX_CHANGE_PCT:            6.0,   // Stock must not be up >6% today (avoid chasing spikes)
+  MAX_52W_HIGH_DIST_PCT:     8.0,   // Price must be ≥8% BELOW the 52-week high (real room to run)
+  MIN_VOLUME_RATIO:          1.2,   // Volume must be ≥1.2x 20-day average (institutional confirmation)
+  MIN_RSI_ENTRY:            52,     // RSI below 52 = no momentum yet
+  MAX_RSI_ENTRY:            65,     // RSI above 65 = getting overbought
+  EMA_CROSSOVER_MAX_DAYS:   10,     // EMA9/EMA20 bullish crossover must be within last 10 days
+  REQUIRED_TREND:       "UPTREND", // UPTREND only (EMA9 > EMA20 and price > EMA9)
 
-  // ── Exit rules ──────────────────────────────────────────────
-  STOP_LOSS_PCT:           -7.0,    // HARD stop: sell immediately if down 7%
-  TAKE_PROFIT_HALF_PCT:     8.0,    // Sell half position at +8% gain
-  TAKE_PROFIT_FULL_PCT:    15.0,    // Sell full position at +15% gain (target)
+  // ── Market mood thresholds (new formula) ────────────────────
+  // score = (today% × 2) + (5-day% × 1) + sentiment_score
+  BULLISH_SCORE_THRESHOLD:   2.0,   // score ≥ 2.0 → BULLISH (can buy)
+  NEUTRAL_SCORE_THRESHOLD:   1.0,   // score 1.0–1.99 → NEUTRAL (no new buys)
+  // score < 1.0 → BEARISH (no new buys, monitor stops)
 
-  // ── Time-stop rules (prevents dead money) ────────────────────
-  // Stage 1: gentle push — sell if flat/red on Day 7
-  TIME_STOP_STAGE1_DAYS:    7,
-  TIME_STOP_STAGE1_MIN_PCT: 3.0,   // Must have ≥3% gain to survive Stage 1
-
-  // Stage 2: unconditional — sell on Day 14 regardless
-  TIME_STOP_STAGE2_DAYS:   14,
-  TIME_STOP_STAGE2_MIN_PCT: 5.0,   // Must have ≥5% gain to survive Stage 2
-
-  // ── Rotation / re-entry rules ───────────────────────────────
-  MAX_ROTATIONS_PER_CYCLE:  1,     // Max 1 rotation (1 SELL + 1 BUY) per hour
-  NO_REBUY_DAYS:            5,     // Cannot re-buy same symbol for 5 days after selling
-
-  // ── Market mood thresholds ──────────────────────────────────
-  BULLISH_INDEX_5D_PCT:    1.5,    // 5-day index change > +1.5% → BULLISH
-  BEARISH_INDEX_5D_PCT:   -1.5,    // 5-day index change < -1.5% → BEARISH
-  BULLISH_TODAY_PCT:       0.4,    // Today's change > +0.4% helps tilt to BULLISH
-  BEARISH_TODAY_PCT:      -0.4,    // Today's change < -0.4% helps tilt to BEARISH
+  // Legacy mood thresholds (kept for backward compat with any old references)
+  BULLISH_INDEX_5D_PCT:      1.5,
+  BEARISH_INDEX_5D_PCT:     -1.5,
+  BULLISH_TODAY_PCT:         0.4,
+  BEARISH_TODAY_PCT:        -0.4,
 
   // ── News sentiment thresholds (EODHD /api/sentiments) ───────
-  // Sentiment is a normalized score from -1 (very negative) to +1 (very positive)
-  // aggregated from news + social media for proxy stocks in each market.
-  SENTIMENT_BULLISH_THRESHOLD:  0.15,   // avg sentiment > +0.15 → positive tilt
-  SENTIMENT_BEARISH_THRESHOLD: -0.15,   // avg sentiment < -0.15 → negative tilt
+  SENTIMENT_BULLISH_THRESHOLD:  0.15,
+  SENTIMENT_BEARISH_THRESHOLD: -0.15,
+  MOOD_WEIGHT_5D_OPEN:          0.50,
+  MOOD_WEIGHT_TODAY_OPEN:       0.30,
+  MOOD_WEIGHT_SENTIMENT_OPEN:   0.20,
+  MOOD_WEIGHT_5D_CLOSED:        0.65,
+  MOOD_WEIGHT_SENTIMENT_CLOSED: 0.35,
 
-  // Score weight mix: open market  → 50% 5d price + 30% today % + 20% sentiment
-  //                   closed market → 65% 5d price + 35% sentiment (no live "today")
-  MOOD_WEIGHT_5D_OPEN:         0.50,
-  MOOD_WEIGHT_TODAY_OPEN:      0.30,
-  MOOD_WEIGHT_SENTIMENT_OPEN:  0.20,
-  MOOD_WEIGHT_5D_CLOSED:       0.65,
-  MOOD_WEIGHT_SENTIMENT_CLOSED:0.35,
+  // ── Exit rules ──────────────────────────────────────────────
+  STOP_LOSS_PCT:            -7.0,   // HARD stop: sell 100% immediately if down 7%
+  TAKE_PROFIT_HALF_PCT:     10.0,   // Sell 50% at +10% gain (lock in half)
+  TAKE_PROFIT_FULL_PCT:     20.0,   // Sell remaining 100% at +20% (full target)
+  TRAILING_STOP_PCT:         5.0,   // After partial sell: trailing stop at entry + 5%
+
+  // ── RSI / ceiling exit rules ─────────────────────────────────
+  EXIT_RSI_OVERBOUGHT:      70,     // Exit 50% if RSI ≥ 70 AND near 52W high
+  EXIT_52W_HIGH_DANGER:      5.0,   // Exit 50% if within 5% of 52W high AND RSI overbought
+  EXIT_DOWNTREND:           true,   // Auto-exit 100% if trend flips to DOWNTREND
+
+  // ── Time-stop rules (prevents dead money) ────────────────────
+  TIME_STOP_STAGE1_DAYS:    7,
+  TIME_STOP_STAGE1_MIN_PCT: 3.0,   // Must have ≥3% gain by Day 7 or sell
+  TIME_STOP_STAGE2_DAYS:   14,
+  TIME_STOP_STAGE2_MIN_PCT: 7.0,   // Must have ≥7% gain by Day 14 or sell (tightened from 5%)
+
+  // ── Rotation / re-entry rules ───────────────────────────────
+  MAX_ROTATIONS_PER_CYCLE:   1,    // Max 1 rotation (1 SELL + 1 BUY) per hour
+  NO_REBUY_DAYS:             5,    // Cannot re-buy same symbol for 5 days after selling
 
   // ── IBKR live trading ────────────────────────────────────────
-  // Set to "LIVE" + configure IBKR API keys in Firebase config to go live.
-  // Currently "PAPER" — all trades simulate in Firestore only.
-  TRADING_MODE:            "PAPER",   // "PAPER" | "LIVE"
+  TRADING_MODE:         "PAPER",   // "PAPER" | "LIVE"
 };
