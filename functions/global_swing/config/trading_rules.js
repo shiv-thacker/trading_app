@@ -28,11 +28,11 @@ module.exports = {
   // ── Entry rules ──────────────────────────────────────────────
   MIN_CHANGE_PCT:            1.5,   // Stock must be up ≥1.5% today (real momentum)
   MAX_CHANGE_PCT:            6.0,   // Stock must not be up >6% today (avoid chasing spikes)
-  MAX_52W_HIGH_DIST_PCT:     8.0,   // Price must be ≥8% BELOW the 52-week high (real room to run)
-  MIN_VOLUME_RATIO:          1.2,   // Volume must be ≥1.2x 20-day average (institutional confirmation)
-  MIN_RSI_ENTRY:            52,     // RSI below 52 = no momentum yet
-  MAX_RSI_ENTRY:            65,     // RSI above 65 = getting overbought
-  EMA_CROSSOVER_MAX_DAYS:   10,     // EMA9/EMA20 bullish crossover must be within last 10 days
+  MAX_52W_HIGH_DIST_PCT:     5.0,   // Price must be ≥5% BELOW the 52-week high (V2: was 8%)
+  MIN_VOLUME_RATIO:          1.2,   // Base volume bar; news sentiment can relax to 1.0/0.9/0.8x
+  MIN_RSI_ENTRY:            48,     // RSI below 48 = no momentum yet (V2: was 52)
+  MAX_RSI_ENTRY:            65,     // Base RSI ceiling; news sentiment can extend to 66/68/70
+  EMA_CROSSOVER_MAX_DAYS:   20,     // EMA crossover within last 20 days (V2: was 10)
   REQUIRED_TREND:       "UPTREND", // UPTREND only (EMA9 > EMA20 and price > EMA9)
 
   // ── Market mood thresholds (new formula) ────────────────────
@@ -50,6 +50,10 @@ module.exports = {
   // ── News sentiment thresholds (EODHD /api/sentiments) ───────
   SENTIMENT_BULLISH_THRESHOLD:  0.15,
   SENTIMENT_BEARISH_THRESHOLD: -0.15,
+  // Per-stock news tiers (V2) — relax RSI/volume when sentiment is strong
+  NEWS_SENTIMENT_MILD:           0.3,   // >0.3 → vol≥1.0x, RSI≤66, +2 score pts
+  NEWS_SENTIMENT_STRONG:         0.5,   // >0.5 → vol≥0.9x, RSI≤68, +3 score pts
+  NEWS_SENTIMENT_VERY:           0.7,   // >0.7 → vol≥0.8x, RSI≤70, +4 score pts
   MOOD_WEIGHT_5D_OPEN:          0.50,
   MOOD_WEIGHT_TODAY_OPEN:       0.30,
   MOOD_WEIGHT_SENTIMENT_OPEN:   0.20,

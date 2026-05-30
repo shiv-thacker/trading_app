@@ -296,6 +296,62 @@ async function getAllMarketSentiments() {
   return results;
 }
 
+/**
+ * Fetch EODHD per-stock sentiment for candidate screening (V2).
+ * Batches symbols to stay within API limits; cached 1 hour per symbol-day.
+ *
+ * @param {string[]} symbols  e.g. ["AAPL.US", "MSFT.US"]
+ * @returns {Promise<Object>} Map: { "AAPL.US": 0.42, ... } — missing = no data
+ */
+async function getStockSentiments(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+
+  const today     = new Date().toISOString().split("T")[0];
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+  const unique    = [...new Set(symbols)];
+  const result    = {};
+  const BATCH     = 15;
+
+  for (let i = 0; i < unique.length; i += BATCH) {
+    const chunk    = unique.slice(i, i + BATCH);
+    const cacheKey = `stock_sentiment_${today}_${chunk.join("_")}`;
+
+    let rawData;
+    try {
+      rawData = await eohdGet(
+        "/sentiments",
+        { s: chunk.join(","), from: yesterday, to: today, fmt: "json" },
+        cacheKey,
+        SENTIMENT_TTL
+      );
+    } catch (err) {
+      logger.warn(`Stock sentiment batch failed (${chunk.length} symbols):`, err.message);
+      continue;
+    }
+
+    if (!rawData || typeof rawData !== "object") continue;
+
+    for (const sym of chunk) {
+      const entries = rawData[sym];
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+
+      const todayEntry = entries.find(e => e.date === today);
+      const entry      = todayEntry || entries[entries.length - 1];
+
+      if (entry && typeof entry.normalized === "number" && entry.count >= 1) {
+        result[sym] = Math.round(entry.normalized * 1000) / 1000;
+      }
+    }
+  }
+
+  const withData = Object.keys(result).length;
+  if (withData > 0) {
+    logger.info(`Stock sentiment: ${withData}/${unique.length} symbols with data`);
+  }
+
+  return result;
+}
+
 module.exports = {
   getLiveQuotes,
   getLiveIndex,
@@ -303,5 +359,6 @@ module.exports = {
   getLiveUsdInrRate,
   getLiveAllFxRates,
   getAllMarketSentiments,
+  getStockSentiments,
   MARKET_SENTIMENT_PROXIES,
 };

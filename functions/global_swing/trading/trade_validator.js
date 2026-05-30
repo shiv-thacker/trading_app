@@ -15,19 +15,20 @@
  *   ④  No re-buy within NO_REBUY_DAYS days of a recent sell
  *   ⑤  Sufficient cash after trade + ₹20,000 reserve
  *   ⑥  Position size ≤ 25% of total portfolio
- *   ⑦  52W high proximity ≥ 8% below (the 3% rule killed P911 and 9502.T)
- *   ⑧  RSI strictly 52–65 (not 40–68; tighter sweet spot)
+ *   ⑦  52W high proximity ≥ 5% below (V2)
+ *   ⑧  RSI 48–65 base (news can extend to 66/68/70)
  *   ⑨  Market mood guard — BEARISH or NEUTRAL blocks new buys
  *   ⑩  Trend guard — UPTREND only (SIDEWAYS/DOWNTREND blocked)
- *   ⑪  Volume guard — must be ≥ 1.2x 20-day average
+ *   ⑪  Volume guard — ≥1.2x base (news can relax to 1.0/0.9/0.8x)
  *   ⑫  Daily move guard — must be +1.5% to +6% today
- *   ⑬  EMA crossover freshness — crossover within last 10 days
+ *   ⑬  EMA crossover freshness — within last 20 days (V2)
  *   ⑭  Index outperformance — stock must beat its market index today
  *   ⑮  Minimum confidence score — score must be ≥ 8 / 15
  */
 
 const R      = require("../config/trading_rules");
 const { toINR } = require("../db/firestore_db");
+const { getNewsAdjustedRules } = require("../analysis/news_rules");
 const logger = require("firebase-functions/logger");
 
 /**
@@ -102,10 +103,15 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL", 
     };
   }
 
-  // ⑧ RSI strict range 52–65 ──────────────────────────────────
-  const rsi = indicators.rsi ?? 50;
-  if (rsi > R.MAX_RSI_ENTRY) {
-    return { ok: false, reason: `RSI ${rsi} > ${R.MAX_RSI_ENTRY} — overbought, risk of reversal` };
+  // ⑧ RSI range (news-adjusted ceiling) ───────────────────────
+  const rsi       = indicators.rsi ?? 50;
+  const newsAdj   = getNewsAdjustedRules(indicators.newsSentiment);
+  const maxRsi    = indicators.maxRsiEntry ?? newsAdj.rsiMax;
+  if (rsi > maxRsi) {
+    const newsNote = indicators.newsSentiment > R.NEWS_SENTIMENT_MILD
+      ? ` (news-adjusted max ${maxRsi})`
+      : "";
+    return { ok: false, reason: `RSI ${rsi} > ${maxRsi}${newsNote} — overbought, risk of reversal` };
   }
   if (rsi < R.MIN_RSI_ENTRY) {
     return { ok: false, reason: `RSI ${rsi} < ${R.MIN_RSI_ENTRY} — no momentum yet, too early` };
@@ -128,12 +134,16 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL", 
     };
   }
 
-  // ⑪ Volume guard — ≥ 1.2x average ──────────────────────────
+  // ⑪ Volume guard (news-adjusted floor) ─────────────────────
   const volumeRatio = indicators.volumeRatio ?? 1.5;
-  if (volumeRatio < R.MIN_VOLUME_RATIO) {
+  const minVolume   = indicators.minVolumeRatio ?? newsAdj.volumeMin;
+  if (volumeRatio < minVolume) {
+    const newsNote = indicators.newsSentiment > R.NEWS_SENTIMENT_MILD
+      ? ` (news-adjusted min ${minVolume}x)`
+      : "";
     return {
       ok:     false,
-      reason: `${trade.symbol} volume ratio ${volumeRatio.toFixed(2)}x < ${R.MIN_VOLUME_RATIO}x — low volume moves almost always reverse`,
+      reason: `${trade.symbol} volume ratio ${volumeRatio.toFixed(2)}x < ${minVolume}x${newsNote} — low volume moves almost always reverse`,
     };
   }
 
@@ -154,7 +164,7 @@ function validateBuy(trade, portfolio, indicators = {}, marketMood = "NEUTRAL", 
     }
   }
 
-  // ⑬ EMA crossover freshness — within last 10 days ──────────
+  // ⑬ EMA crossover freshness ───────────────────────────────────
   const crossoverAge = indicators.emaCrossoverDaysAgo;
   if (crossoverAge !== null && crossoverAge !== undefined) {
     if (crossoverAge > R.EMA_CROSSOVER_MAX_DAYS) {

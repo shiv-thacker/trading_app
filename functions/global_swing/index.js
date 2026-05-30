@@ -32,7 +32,7 @@
 const logger = require("firebase-functions/logger");
 
 // ── Data layer ────────────────────────────────────────────────
-const { getLiveQuotes, getTopMovers, getLiveUsdInrRate, getLiveAllFxRates } = require("./data/eodhd_live");
+const { getLiveQuotes, getTopMovers, getLiveUsdInrRate, getLiveAllFxRates, getStockSentiments } = require("./data/eodhd_live");
 const { getBatchHistoricalCandles }         = require("./data/eodhd_history");
 const { getNSELivePrices, getNSEBroadMovers } = require("./data/nse_live");
 const { getDynamicTopMovers }               = require("./data/eodhd_screener");
@@ -51,6 +51,11 @@ const {
   isMarketOpen,
 } = require("./analysis/market_mood");
 const { computeIndicators }                 = require("./analysis/technical");
+const {
+  lookupStockSentiment,
+  applyNewsToIndicators,
+  passesEntryFilter,
+} = require("./analysis/news_rules");
 
 // ── Trading layer ─────────────────────────────────────────────
 const { getSwingDecision }                  = require("./trading/swing_brain");
@@ -299,24 +304,44 @@ async function runGlobalSwingCycle() {
 
       const indexTodayPct = mood.todayChangePct;
 
-      const withIndicators = movers.map(m => ({
-        ...m,
-        market:     mood.marketCode,
-        currency:   market.currency,
-        indicators: {
-          ...computeIndicators(candleMap[m.symbol] || [], m.volume || 0),
-          changePct: m.changePct ?? 0,  // attach to indicators so validator can access it
-        },
-      }));
+      // V2: per-stock EODHD news sentiment (US/DE/IN — not available for Japan .T)
+      let sentimentMap = {};
+      if (eohdSymbols.length > 0) {
+        try {
+          sentimentMap = await getStockSentiments(eohdSymbols);
+        } catch (err) {
+          logger.warn(`${mood.marketCode} stock sentiment fetch failed (non-fatal): ${err.message}`);
+        }
+      }
 
-      // Pre-filter: enforce ALL 7 entry rules before sending to Claude.
-      // Log removals per rule to diagnose "0 candidates" cycles.
+      const withIndicators = movers.map(m => {
+        const sentiment = lookupStockSentiment(sentimentMap, m.symbol);
+        const baseInd   = {
+          ...computeIndicators(candleMap[m.symbol] || [], m.volume || 0),
+          changePct: m.changePct ?? 0,
+        };
+        return {
+          ...m,
+          market:     mood.marketCode,
+          currency:   market.currency,
+          sentiment,
+          indicators: applyNewsToIndicators(baseInd, sentiment),
+        };
+      });
+
+      // Pre-filter: enforce ALL 7 entry rules (news can relax RSI/volume) before Claude.
       const total          = withIndicators.length;
       const rsiLow         = withIndicators.filter(s => s.indicators.rsi < R.MIN_RSI_ENTRY).length;
-      const rsiHigh        = withIndicators.filter(s => s.indicators.rsi > R.MAX_RSI_ENTRY).length;
+      const rsiHigh        = withIndicators.filter(s => {
+        const maxRsi = s.indicators.maxRsiEntry ?? R.MAX_RSI_ENTRY;
+        return s.indicators.rsi > maxRsi;
+      }).length;
       const near52wHigh    = withIndicators.filter(s => s.indicators.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT).length;
       const notUptrend     = withIndicators.filter(s => s.indicators.trend !== "UPTREND" && s.indicators.trend !== "UNKNOWN").length;
-      const lowVolume      = withIndicators.filter(s => s.indicators.volumeRatio < R.MIN_VOLUME_RATIO).length;
+      const lowVolume      = withIndicators.filter(s => {
+        const minVol = s.indicators.minVolumeRatio ?? R.MIN_VOLUME_RATIO;
+        return s.indicators.volumeRatio < minVol;
+      }).length;
       const badMove        = withIndicators.filter(s => {
         const c = s.changePct ?? 0;
         return c < R.MIN_CHANGE_PCT || c > R.MAX_CHANGE_PCT;
@@ -329,36 +354,27 @@ async function runGlobalSwingCycle() {
         const c = s.changePct ?? 0;
         return typeof indexTodayPct === "number" && c <= indexTodayPct;
       }).length;
+      const newsAssisted   = withIndicators.filter(s =>
+        (s.sentiment ?? 0) > R.NEWS_SENTIMENT_MILD
+      ).length;
 
       logger.info(
         `${mood.flag} ${mood.marketCode} pre-filter: ${total} movers → ` +
-        `RSI<${R.MIN_RSI_ENTRY}: ${rsiLow} | RSI>${R.MAX_RSI_ENTRY}: ${rsiHigh} | ` +
+        `RSI<${R.MIN_RSI_ENTRY}: ${rsiLow} | RSI>max: ${rsiHigh} | ` +
         `<${R.MAX_52W_HIGH_DIST_PCT}%52W: ${near52wHigh} | notUP: ${notUptrend} | ` +
-        `vol<${R.MIN_VOLUME_RATIO}x: ${lowVolume} | badChg: ${badMove} | ` +
-        `staleXover: ${staleXover} | underperforms-idx: ${underperformer}`
+        `vol low: ${lowVolume} | badChg: ${badMove} | ` +
+        `staleXover: ${staleXover} | underperforms-idx: ${underperformer} | ` +
+        `news+ (>${R.NEWS_SENTIMENT_MILD}): ${newsAssisted}`
       );
 
-      const filtered = withIndicators.filter(s => {
-        const ind = s.indicators;
-        const chg = s.changePct ?? 0;
-        const age = ind.emaCrossoverDaysAgo;
-
-        // Rule 1: UPTREND only (no SIDEWAYS / DOWNTREND)
-        if (ind.trend !== "UPTREND" && ind.trend !== "UNKNOWN") return false;
-        // Rule 1b: EMA crossover must be fresh (within EMA_CROSSOVER_MAX_DAYS)
-        if (age !== null && age !== undefined && age > R.EMA_CROSSOVER_MAX_DAYS) return false;
-        // Rule 2: RSI strictly 52–65
-        if (ind.rsi < R.MIN_RSI_ENTRY || ind.rsi > R.MAX_RSI_ENTRY) return false;
-        // Rule 3: 52W high buffer ≥ 8%
-        if (ind.pctBelow52wHigh < R.MAX_52W_HIGH_DIST_PCT) return false;
-        // Rule 4: Volume ≥ 1.2x
-        if (ind.volumeRatio < R.MIN_VOLUME_RATIO) return false;
-        // Rule 5: Today's move +1.5% to +6%
-        if (chg < R.MIN_CHANGE_PCT || chg > R.MAX_CHANGE_PCT) return false;
-        // Rule 6: Must outperform index today
-        if (typeof indexTodayPct === "number" && chg <= indexTodayPct) return false;
-        return true;
-      });
+      const filtered = withIndicators.filter(s =>
+        passesEntryFilter(
+          s.indicators,
+          s.changePct ?? 0,
+          indexTodayPct,
+          s.sentiment
+        )
+      );
 
       if (filtered.length > 0) {
         // Cap at 12 per market for Claude's prompt size

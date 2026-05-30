@@ -23,6 +23,8 @@
  *   Each candle: { date, open, high, low, close, adjusted_close, volume }
  */
 
+const R = require("../config/trading_rules");
+
 /**
  * Compute RSI (Relative Strength Index) using Wilder's smoothing.
  * Standard 14-period RSI.
@@ -174,24 +176,21 @@ function computeIndicators(candles, todayVolume = 0) {
 
   // ── EMA crossover age ────────────────────────────────────────
   // How many trading days ago did EMA9 cross above EMA20?
-  // Returns: 0 = crossover today, 1 = yesterday, ..., 10 = 10 days ago
-  // Returns: null = no bullish crossover in last 10 days (stale or not in uptrend)
-  // Rule: crossover must be within 10 days for entry to qualify (fresh momentum).
+  const maxCrossDays = R.EMA_CROSSOVER_MAX_DAYS;
   let emaCrossoverDaysAgo = null;
   if (trend === "UPTREND" && closes.length >= 25) {
-    for (let daysBack = 1; daysBack <= 10; daysBack++) {
+    for (let daysBack = 1; daysBack <= maxCrossDays; daysBack++) {
       const prevCloses = closes.slice(0, closes.length - daysBack);
       if (prevCloses.length < 20) break;
       const prevEma9  = computeEMA(prevCloses, 9);
       const prevEma20 = computeEMA(prevCloses, 20);
       if (prevEma9 <= prevEma20) {
-        // Found the day before the crossover — crossover was `daysBack` days ago
         emaCrossoverDaysAgo = daysBack;
         break;
       }
     }
-    // If EMA9 was already above EMA20 for all 10 days back, crossover is stale (> 10 days)
-    if (emaCrossoverDaysAgo === null) emaCrossoverDaysAgo = 11;
+    // EMA9 was above EMA20 for entire lookback → crossover is stale
+    if (emaCrossoverDaysAgo === null) emaCrossoverDaysAgo = maxCrossDays + 1;
   }
 
   return {
@@ -200,12 +199,12 @@ function computeIndicators(candles, todayVolume = 0) {
     ema20,
     high52w:             Math.round(high52w * 100) / 100,
     low52w:              Math.round(low52w  * 100) / 100,
-    pctBelow52wHigh,     // must be ≥ 8% to qualify for BUY (master rules v2)
+    pctBelow52wHigh,     // must be ≥ MAX_52W_HIGH_DIST_PCT% below 52W high to qualify
     avgVolume20d,
     volumeRatio,
     support10d,
     trend,
-    emaCrossoverDaysAgo, // null = no crossover; 1–10 = fresh; 11 = stale (>10 days)
+    emaCrossoverDaysAgo, // null = no crossover; 1–N = fresh; N+1 = stale
     dataPoints:          candles.length,
   };
 }

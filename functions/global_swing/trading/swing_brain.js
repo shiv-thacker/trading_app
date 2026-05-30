@@ -75,20 +75,20 @@ Rule 1 — Trend: UPTREND only
   • EMA crossover must have happened within last ${R.EMA_CROSSOVER_MAX_DAYS} days (fresh, not stale)
   • REJECT if: SIDEWAYS, DOWNTREND, or crossover older than ${R.EMA_CROSSOVER_MAX_DAYS} days
 
-Rule 2 — RSI: ${R.MIN_RSI_ENTRY}–${R.MAX_RSI_ENTRY} only
+Rule 2 — RSI: ${R.MIN_RSI_ENTRY}–${R.MAX_RSI_ENTRY} base (news can extend to 66/68/70)
   • RSI below ${R.MIN_RSI_ENTRY} = no momentum yet, too early
-  • RSI above ${R.MAX_RSI_ENTRY} = getting overbought, risk of reversal
+  • RSI above base ${R.MAX_RSI_ENTRY} = getting overbought — unless strong positive news relaxes ceiling
   • Sweet spot ${R.MIN_RSI_ENTRY}–${R.MAX_RSI_ENTRY}: has momentum, room to run
 
 Rule 3 — 52-Week High Buffer: minimum ${R.MAX_52W_HIGH_DIST_PCT}% below
   • Stock must be ≥${R.MAX_52W_HIGH_DIST_PCT}% below its 52W high
-  • The old 3% rule caused P911 and 9502.T losses — 8% gives REAL room to move
+  • V2 uses 5% buffer — balances room to run vs catching established rallies
   • REJECT if pctBelow52wHigh < ${R.MAX_52W_HIGH_DIST_PCT}%
 
-Rule 4 — Volume: minimum ${R.MIN_VOLUME_RATIO}x average
+Rule 4 — Volume: minimum ${R.MIN_VOLUME_RATIO}x average (news can relax to 1.0/0.9/0.8x)
   • Today's volume must be ≥${R.MIN_VOLUME_RATIO}x the 20-day average
-  • High volume = real institutional buying, not noise
-  • REJECT if volumeRatio < ${R.MIN_VOLUME_RATIO}x
+  • Strong positive news (EODHD sentiment >0.3) lowers volume bar — catalyst-driven moves
+  • REJECT if volumeRatio below news-adjusted minimum
 
 Rule 5 — Today's price move: +${R.MIN_CHANGE_PCT}% to +${R.MAX_CHANGE_PCT}%
   • Must be up ≥${R.MIN_CHANGE_PCT}% today (real momentum)
@@ -123,6 +123,9 @@ After passing all 7 rules, score each candidate (max 15 points):
   Stock beats index by 1%–2%     → +1 pt
   Sector also up today           → +1 pt
   Market score ≥ 3.0 (strong bull) → +1 pt
+  EODHD news sentiment >0.3      → +2 pts (vol min 1.0x, RSI≤66)
+  EODHD news sentiment >0.5      → +3 pts (vol min 0.9x, RSI≤68)
+  EODHD news sentiment >0.7      → +4 pts (vol min 0.8x, RSI≤70)
 
   MINIMUM to buy: ${R.MIN_CONFIDENCE_SCORE} points
   Score ${R.SCORE_MID_THRESHOLD}–${R.SCORE_HIGH_THRESHOLD - 1} → buy ₹${(R.POSITION_SIZE_MID / 1000).toFixed(0)},000  |  Score ≥${R.SCORE_HIGH_THRESHOLD} → buy ₹${(R.POSITION_SIZE_HIGH / 1000).toFixed(0)},000  |  Score ${R.MIN_CONFIDENCE_SCORE}–${R.SCORE_MID_THRESHOLD - 1} → buy ₹${(R.POSITION_SIZE_BASE / 1000).toFixed(0)},000
@@ -310,8 +313,8 @@ function buildUserPrompt({ portfolio, marketMoods, candidates, holdingsWithHisto
       if (!stocks?.length) continue;
       const indexPct   = m.todayChangePct;
       lines.push(`${m.flag} ${mktCode} (${m.currency}) — mood score ${m.score} | index today: ${indexPct >= 0 ? "+" : ""}${indexPct}% | 5d: ${m.fiveDayChangePct >= 0 ? "+" : ""}${m.fiveDayChangePct}%`);
-      lines.push("Symbol           Price     Chg%    vs-Idx  RSI  EMAage  %↓52wHi  VolRatio  Trend");
-      lines.push("──────────────────────────────────────────────────────────────────────────────────");
+      lines.push("Symbol           Price     Chg%    vs-Idx  RSI  EMAage  %↓52wHi  VolRatio  News   Trend");
+      lines.push("────────────────────────────────────────────────────────────────────────────────────────────");
 
       for (const s of stocks) {
         const ind         = s.indicators || {};
@@ -322,12 +325,16 @@ function buildUserPrompt({ portfolio, marketMoods, candidates, holdingsWithHisto
         const volR        = typeof ind.volumeRatio === "number"
           ? `${ind.volumeRatio.toFixed(1)}x`
           : "?";
+        const newsStr     = typeof s.sentiment === "number"
+          ? `${s.sentiment >= 0 ? "+" : ""}${s.sentiment.toFixed(2)}`.padEnd(7)
+          : "?".padEnd(7);
         const stockChg    = s.changePct ?? 0;
         const vsIdx       = typeof indexPct === "number"
           ? `${(stockChg - indexPct) >= 0 ? "+" : ""}${(stockChg - indexPct).toFixed(1)}%`
           : "?";
+        const maxCross    = R.EMA_CROSSOVER_MAX_DAYS;
         const crossAge    = ind.emaCrossoverDaysAgo !== null && ind.emaCrossoverDaysAgo !== undefined
-          ? (ind.emaCrossoverDaysAgo > 10 ? "stale" : `${ind.emaCrossoverDaysAgo}d`)
+          ? (ind.emaCrossoverDaysAgo > maxCross ? "stale" : `${ind.emaCrossoverDaysAgo}d`)
           : "?";
 
         lines.push(
@@ -339,6 +346,7 @@ function buildUserPrompt({ portfolio, marketMoods, candidates, holdingsWithHisto
           `${crossAge.padEnd(8)}` +
           `${below}` +
           `${String(volR).padEnd(10)}` +
+          `${newsStr}` +
           `${trend}`
         );
       }
