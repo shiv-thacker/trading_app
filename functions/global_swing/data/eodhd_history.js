@@ -16,11 +16,11 @@
  *
  * CACHING: 4 hours (EOD data doesn't change intraday — safe to cache)
  *
- * WORKS FOR ALL 4 MARKETS on $29.99 plan:
- *   India:   TCS.NSE, RELIANCE.NSE
+ * WORKS FOR US / Germany on $29.99 plan:
  *   USA:     AAPL.US, NVDA.US
  *   Germany: SAP.XETRA
- *   Japan:   7203.T
+ *
+ * India (.NSE) and Japan (.T) use Yahoo Finance — see yahoo_india.js / yahoo_japan.js.
  */
 
 const { eohdGet } = require("./eodhd_client");
@@ -78,11 +78,15 @@ async function getHistoricalCandles(symbol) {
 async function getBatchHistoricalCandles(symbols) {
   if (!symbols || symbols.length === 0) return {};
 
+  // Skip symbols EODHD does not cover — callers should use Yahoo modules instead
+  const supported = symbols.filter(s => !s.endsWith(".NSE") && !s.endsWith(".T"));
+  if (supported.length === 0) return {};
+
   const results    = {};
   const CHUNK_SIZE = 5;  // 5 parallel requests max
 
-  for (let i = 0; i < symbols.length; i += CHUNK_SIZE) {
-    const chunk   = symbols.slice(i, i + CHUNK_SIZE);
+  for (let i = 0; i < supported.length; i += CHUNK_SIZE) {
+    const chunk   = supported.slice(i, i + CHUNK_SIZE);
     const settled = await Promise.allSettled(
       chunk.map(async sym => ({ sym, candles: await getHistoricalCandles(sym) }))
     );
@@ -94,12 +98,12 @@ async function getBatchHistoricalCandles(symbols) {
     }
 
     // Small breathing room between chunks
-    if (i + CHUNK_SIZE < symbols.length) {
+    if (i + CHUNK_SIZE < supported.length) {
       await new Promise(res => setTimeout(res, 300));
     }
   }
 
-  logger.info(`getBatchHistoricalCandles: fetched for ${Object.keys(results).length}/${symbols.length} symbols`);
+  logger.info(`getBatchHistoricalCandles: fetched for ${Object.keys(results).length}/${supported.length} symbols`);
   return results;
 }
 

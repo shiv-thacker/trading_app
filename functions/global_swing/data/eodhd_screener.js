@@ -159,17 +159,15 @@ async function _fetchScreenerUniverse(cfg) {
   // Log exact params so we can verify what's being sent
   logger.info(
     `Screener request [${cfg.exchange}]: filters=${filters} | ` +
-    `sort=change_p.desc | limit=${cfg.universeSize}`
+    `sort=refund_1d_p.desc | limit=${cfg.universeSize}`
   );
 
-  // Correct EODHD screener sort field: "refund_1d_p" (not "change_p.desc" — that causes 422)
-  // order: "desc" = highest daily gainers first
+  // EODHD screener sort format: field_name.asc|desc (no separate order param)
   const data = await eohdGet(
     "/screener",
     {
       filters,
-      sort:   "refund_1d_p",
-      order:  "desc",
+      sort:   "refund_1d_p.desc",
       limit:  cfg.universeSize,
       offset: 0,
     },

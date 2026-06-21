@@ -12,7 +12,7 @@
  *     🇺🇸 USA    → IST 19:30–01:30  (US evening session from India)
  *
  * CANDIDATE DISCOVERY (how ARJUN finds stocks each cycle):
- *   India : NSE free API → scans full Nifty 500 (500 stocks) every cycle, zero EODHD cost.
+ *   India NSE : scans via nse_live.js; OHLCV via Yahoo Finance (yahoo_india.js)
  *   US/DE/JP : EODHD Screener API (included in $29.99 plan) → scans full exchange
  *              every cycle, ranked by % change + volume + market cap filter.
  *

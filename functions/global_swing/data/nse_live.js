@@ -14,8 +14,10 @@
  *      eodhd_live.getLiveQuotes() for the missing symbols
  *
  * KNOWN LIMITATIONS:
- *   - NSE occasionally blocks GCP IPs (returns 403)
- *   - Requires a fresh session cookie from www.nseindia.com
+ *   - NSE uses Akamai bot protection — blocks Postman, many VPNs, and GCP IPs
+ *   - "Access Denied" on www.nseindia.com is normal from blocked networks
+ *   - When NSE fails, global_swing/index.js falls back to yahoo_india.js then EODHD
+ *   - Requires a fresh session cookie from www.nseindia.com when reachable
  *   - Cookie is cached 5 minutes to avoid hammering NSE
  *   - This module is India-only; it is NOT called for US/DE/JP
  */
@@ -32,32 +34,75 @@ const NSE_HEADERS = {
   "Origin":          "https://www.nseindia.com",
 };
 
-const nseAxios = axios.create({ timeout: 10000, headers: NSE_HEADERS });
+const nseAxios = axios.create({ timeout: 12000, headers: NSE_HEADERS });
 
 // Session cookie cache
 let _nseCookie       = null;
 let _nseCookieExpiry = 0;
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function clearNseCookie() {
+  _nseCookie       = null;
+  _nseCookieExpiry = 0;
+}
 
 /**
  * Obtains a fresh NSE session cookie.
  * Cached for 5 minutes — reused across calls within the same cycle.
  * Returns null silently if NSE is unreachable (caller falls back).
  */
-async function getNseCookie() {
-  if (_nseCookie && Date.now() < _nseCookieExpiry) return _nseCookie;
+async function getNseCookie(forceRefresh = false) {
+  if (!forceRefresh && _nseCookie && Date.now() < _nseCookieExpiry) {
+    return _nseCookie;
+  }
 
   try {
     const res = await axios.get("https://www.nseindia.com", {
-      timeout: 8000,
+      timeout: 10000,
       headers: NSE_HEADERS,
     });
     const rawCookies = res.headers["set-cookie"] || [];
     _nseCookie       = rawCookies.map(c => c.split(";")[0]).join("; ");
     _nseCookieExpiry = Date.now() + 5 * 60_000;
     return _nseCookie;
-  } catch {
-    return null;  // Silently fail — caller will use EODHD fallback
+  } catch (err) {
+    logger.warn(`NSE cookie fetch failed: ${err.message}`);
+    return null;
   }
+}
+
+/**
+ * GET an NSE JSON endpoint with cookie + retry (mirrors market_data.js pattern).
+ * @param {string} path - e.g. "/api/equity-stockIndices?index=NIFTY%20500"
+ */
+async function nseGet(path) {
+  let lastErr;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const cookie  = await getNseCookie(attempt > 1);
+    const headers = cookie ? { ...NSE_HEADERS, Cookie: cookie } : NSE_HEADERS;
+
+    try {
+      const { data } = await nseAxios.get(`https://www.nseindia.com${path}`, { headers });
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const status = err?.response?.status;
+
+      if (status === 403) {
+        logger.warn(`NSE 403 on ${path} (attempt ${attempt}) — refreshing cookie`);
+        clearNseCookie();
+      }
+
+      if (status === 404 || status === 400) throw err;
+      if (attempt < 3) await sleep(600 * attempt);
+    }
+  }
+
+  throw lastErr;
 }
 
 /**
@@ -73,19 +118,10 @@ async function getNseCookie() {
 async function getNSELivePrices(eohdSymbols) {
   if (!eohdSymbols || eohdSymbols.length === 0) return {};
 
-  // Convert "TCS.NSE" → "TCS" for NSE API lookup
   const bareSymbols = eohdSymbols.map(s => s.replace(".NSE", ""));
 
   try {
-    const cookie  = await getNseCookie();
-    const headers = cookie ? { ...NSE_HEADERS, Cookie: cookie } : NSE_HEADERS;
-
-    // Single batch call for entire Nifty 500
-    const { data } = await nseAxios.get(
-      "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
-      { headers }
-    );
-
+    const data   = await nseGet("/api/equity-stockIndices?index=NIFTY%20500");
     const stocks = (data?.data || []).filter(s => s.symbol && s.symbol !== "NIFTY 500");
 
     const priceMap = {};
@@ -95,10 +131,8 @@ async function getNSELivePrices(eohdSymbols) {
       }
     }
 
-    const found = Object.keys(priceMap).length;
-    logger.info(`NSE live: ${found}/${eohdSymbols.length} prices fetched`);
+    logger.info(`NSE live: ${Object.keys(priceMap).length}/${eohdSymbols.length} prices fetched`);
     return priceMap;
-
   } catch (err) {
     logger.warn(`NSE live fetch failed — EODHD fallback will be used: ${err.message}`);
     return {};
@@ -113,14 +147,7 @@ async function getNSELivePrices(eohdSymbols) {
  */
 async function getNSENiftyIndex() {
   try {
-    const cookie  = await getNseCookie();
-    const headers = cookie ? { ...NSE_HEADERS, Cookie: cookie } : NSE_HEADERS;
-
-    const { data } = await nseAxios.get(
-      "https://www.nseindia.com/api/allIndices",
-      { headers }
-    );
-
+    const data    = await nseGet("/api/allIndices");
     const nifty50 = (data?.data || []).find(i => i.index === "NIFTY 50");
     if (!nifty50) return null;
 
@@ -136,34 +163,21 @@ async function getNSENiftyIndex() {
 
 /**
  * Scan the full Nifty 500 universe for today's top gainers.
- * Uses the SAME free API call as getNSELivePrices — zero extra EODHD cost.
- * This replaces the fixed India watchlist for candidate discovery.
- *
- * The Nifty 500 index covers the top 500 stocks by market cap on NSE,
- * representing ~95% of total NSE market capitalisation.
  *
  * @param {number} minChangePct  - Min % gain to qualify (default 1.0%)
  * @param {number} minVolume     - Min shares traded (default 200,000)
  * @param {number} topN          - Max results to return (default 25)
  * @returns {Promise<Array>}     - Array of { symbol, price, changePct, volume }
- *                                 Returns [] if NSE API is unavailable.
  */
 async function getNSEBroadMovers(minChangePct = 1.0, minVolume = 200000, topN = 25) {
   try {
-    const cookie  = await getNseCookie();
-    const headers = cookie ? { ...NSE_HEADERS, Cookie: cookie } : NSE_HEADERS;
-
-    const { data } = await nseAxios.get(
-      "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
-      { headers }
-    );
-
+    const data   = await nseGet("/api/equity-stockIndices?index=NIFTY%20500");
     const stocks = (data?.data || []).filter(s => s.symbol && s.symbol !== "NIFTY 500");
 
     const movers = stocks
       .filter(s => {
-        const pct = parseFloat(s.pChange || 0);
-        const vol = parseInt(s.totalTradedVolume || 0, 10);
+        const pct   = parseFloat(s.pChange || 0);
+        const vol   = parseInt(s.totalTradedVolume || 0, 10);
         const price = parseFloat(s.lastPrice || 0);
         return pct >= minChangePct && vol >= minVolume && price > 1;
       })
@@ -181,7 +195,6 @@ async function getNSEBroadMovers(minChangePct = 1.0, minVolume = 200000, topN = 
       `from full Nifty 500 (${stocks.length} stocks scanned)`
     );
     return movers;
-
   } catch (err) {
     logger.warn(`NSE broad scan failed — will fallback to watchlist: ${err.message}`);
     return [];

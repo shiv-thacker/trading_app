@@ -198,6 +198,7 @@ async function recordSnapshot(portfolio) {
 const { getLiveQuotes, getTopMovers, getLiveUsdInrRate, getLiveAllFxRates } = require("./global_swing/data/eodhd_live");
 const { getBatchHistoricalCandles }                      = require("./global_swing/data/eodhd_history");
 const { getNSEBroadMovers }                              = require("./global_swing/data/nse_live");
+const { getIndiaBatchHistoricalCandles, getIndiaBroadMovers } = require("./global_swing/data/yahoo_india");
 const { getJapanBroadMovers, getJapanBatchHistoricalCandles } = require("./global_swing/data/yahoo_japan");
 const { computeIndicators }                             = require("./global_swing/analysis/technical");
 const { MARKETS }                                       = require("./global_swing/config/markets");
@@ -232,15 +233,16 @@ const MARKET_DEFS = [
     fetchMovers: async () => {
       let m = await getNSEBroadMovers(R.MIN_CHANGE_PCT, 200000, 30);
       if (m.length === 0) {
-        console.log("    NSE API returned 0 → watchlist fallback");
+        console.log("    NSE API returned 0 → Yahoo India fallback");
+        m = await getIndiaBroadMovers(MARKETS.NSE.watchlist, R.MIN_CHANGE_PCT, 25);
+      }
+      if (m.length === 0) {
+        console.log("    Yahoo returned 0 → EODHD watchlist fallback");
         m = await getTopMovers(MARKETS.NSE.watchlist, R.MIN_CHANGE_PCT, 15);
       }
       return m;
     },
-    fetchCandles: async (syms) => getBatchHistoricalCandles(syms),
-  },
-  {
-    code: "US", label: "🇺🇸 USA (NYSE/NASDAQ)", currency: "USD", country: "USA",
+    fetchCandles: async (syms) => getIndiaBatchHistoricalCandles(syms),
     fetchMovers: async () => getTopMovers(MARKETS.US.watchlist, R.MIN_CHANGE_PCT, 20),
     fetchCandles: async (syms) => getBatchHistoricalCandles(syms),
   },
